@@ -14,8 +14,7 @@
       margin: auto;
       line-height: 1.6;
     }
-    h1 { text-align: center; margin: 12px 0 8px; }
-    .subtitle { text-align: center; color: #88ffcc; margin-bottom: 18px; }
+
     .container { background: #111; padding: 22px; border-radius: 12px; border: 1px solid #00ff88; }
     label { display: block; margin: 15px 0 5px; font-weight: bold; }
 
@@ -67,15 +66,19 @@
       min-width: 0;
       flex: 1 1 auto;
     }
-    #turtleImg {
-      width: 170px;
+
+    /* Video (uses turtle.mp4). poster uses turtle.png if present. */
+    #turtleVid {
+      width: 190px;
       height: auto;
       border-radius: 16px;
       background: #000;
       box-shadow: 0 0 0 rgba(0,255,136,0);
       transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
       flex: 0 0 auto;
+      display: block;
     }
+
     .hero-text { min-width: 0; }
     .hero-title {
       font-size: 28px;
@@ -101,9 +104,9 @@
       text-align: center;
       min-width: 92px;
     }
-    .tx-on #turtleImg {
+    .tx-on #turtleVid {
       animation: txPulse 0.9s infinite ease-in-out;
-      filter: brightness(1.15) saturate(1.2);
+      filter: brightness(1.12) saturate(1.2);
       box-shadow: 0 0 22px rgba(0,255,136,0.25);
     }
     .tx-on .tx-badge {
@@ -113,12 +116,11 @@
     }
     @keyframes txPulse {
       0%, 100% { transform: scale(1.00); }
-      50%      { transform: scale(1.06); }
+      50%      { transform: scale(1.05); }
     }
-    /* responsive */
     @media (max-width: 640px) {
       .hero { flex-direction: column; align-items: flex-start; }
-      #turtleImg { width: 100%; max-width: 320px; }
+      #turtleVid { width: 100%; max-width: 360px; }
       .tx-badge { align-self: stretch; }
       .hero-title { font-size: 24px; }
     }
@@ -169,11 +171,6 @@
       font-family: monospace;
       font-size: 14px;
     }
-    a.download-link {
-      display: inline-block;
-      text-decoration: none;
-    }
-    a.download-link button { margin: 0; }
   </style>
 </head>
 <body>
@@ -182,8 +179,12 @@
   <!-- Turtle header / always visible at top -->
   <div class="hero" id="txVisual">
     <div class="hero-left">
-      <!-- Put turtle.png next to index.html in your repo -->
-      <img id="turtleImg" src="./turtle.png" alt="Turtle transmitting Morse code" />
+      <!-- Put turtle.mp4 (and optionally turtle.png) next to index.html in your repo -->
+      <video id="turtleVid" preload="auto" muted playsinline poster="./turtle.png">
+        <source src="./turtle.mp4" type="video/mp4" />
+        Your browser does not support the video tag.
+      </video>
+
       <div class="hero-text">
         <div class="hero-title">Encrypted Morse Messenger</div>
         <div class="hero-sub">Encrypt → Morse → Beep audio (pause/resume/stop) → Decrypt</div>
@@ -195,7 +196,7 @@
   <div class="instructions">
     <strong>How to use:</strong><br>
     1. Enter message + password.<br>
-    2. Click <strong>Transmit</strong> → Morse generated.<br>
+    2. Click <strong>Transmit</strong> → Morse generated (turtle animates).<br>
     3. Copy Morse, play audio, or download the audio WAV.<br>
     4. Paste Morse in the bottom section + same password → decrypt.<br><br>
     <em>Security:</em> AES-256-GCM with random salt/IV + authentication (PBKDF2-SHA256).
@@ -221,6 +222,17 @@
   <div id="output"></div>
 
   <div class="decrypt-section">
+    <div class="mini" style="margin-bottom:10px;">
+      Optional: upload a Morse WAV someone shared to you (playback only).
+    </div>
+    <div class="audio-row">
+      <input id="audioUpload" type="file" accept="audio/wav,audio/*" />
+      <span id="audioUploadName" class="file-chip">No audio loaded</span>
+      <button id="playUploadedBtn" disabled>Play Uploaded Audio</button>
+      <button id="stopUploadedBtn" disabled>Stop Uploaded Audio</button>
+    </div>
+    <audio id="uploadedAudio" controls style="width:100%; margin-top:10px; display:none;"></audio>
+
     <h3>Decrypt a received message</h3>
     <p class="mini">Enter the same password used to encrypt the message.</p>
 
@@ -239,17 +251,6 @@
     <div class="row" style="margin-top: 10px;">
       <button id="decBtn">Decrypt</button>
     </div>
-
-    <div class="mini" style="margin-top:10px;">
-      Optional: upload a Morse WAV someone shared to you (playback only).
-    </div>
-    <div class="audio-row">
-      <input id="audioUpload" type="file" accept="audio/wav,audio/*" />
-      <span id="audioUploadName" class="file-chip">No audio loaded</span>
-      <button id="playUploadedBtn" disabled>Play Uploaded Audio</button>
-      <button id="stopUploadedBtn" disabled>Stop Uploaded Audio</button>
-    </div>
-    <audio id="uploadedAudio" controls style="width:100%; margin-top:10px; display:none;"></audio>
   </div>
 </div>
 
@@ -272,7 +273,7 @@ function toMorseHex(hex) {
 }
 
 function morseToHex(morse) {
-  const groups = morse.trim().split(/\\s+/).filter(Boolean);
+  const groups = morse.trim().split(/\s+/).filter(Boolean);
   let hex = '';
   let invalid = false;
   for (const g of groups) {
@@ -340,8 +341,10 @@ async function aesGcmDecrypt(hex, password) {
 }
 
 /** =========================
- *  TURTLE TRANSMIT VISUAL
+ *  TURTLE TRANSMIT VISUAL + VIDEO
  *  ========================= */
+const turtleVid = document.getElementById("turtleVid");
+
 function setTxVisual(on, label) {
   const container = document.getElementById("txVisual");
   const badge = document.getElementById("txBadge");
@@ -351,6 +354,29 @@ function setTxVisual(on, label) {
   else container.classList.remove("tx-on");
 
   badge.textContent = label || (on ? "TRANSMIT" : "IDLE");
+}
+
+async function playTurtleOnce() {
+  // Start the attached turtle video from the beginning when user clicks Transmit.
+  // Keep muted to avoid autoplay restrictions and unexpected sound.
+  try {
+    if (!turtleVid) return;
+    turtleVid.pause();
+    turtleVid.currentTime = 0;
+    // Some browsers need a tiny delay when resetting currentTime
+    await new Promise(r => setTimeout(r, 10));
+    await turtleVid.play();
+  } catch (_) {
+    // ignore; video playback can fail if file missing or policy blocks
+  }
+}
+
+function stopTurtle() {
+  try {
+    if (!turtleVid) return;
+    turtleVid.pause();
+    turtleVid.currentTime = 0;
+  } catch (_) {}
 }
 
 /** =========================
@@ -543,7 +569,6 @@ function buildMorseTimelineMs(morseStr, unitMs) {
       timeline.push({ tone: false, ms: wordGap });
     }
   }
-  // trim trailing silence
   while (timeline.length && timeline[timeline.length - 1].tone === false) timeline.pop();
   return timeline;
 }
@@ -597,7 +622,7 @@ function synthMorseWavBlob(morseStr, opts = {}) {
   let idx = 0;
   let phase = 0;
   const phaseInc = 2 * Math.PI * freq / sampleRate;
-  const fadeMs = Math.min(6, unit * 0.2); // small fade to avoid clicks
+  const fadeMs = Math.min(6, unit * 0.2);
   const fadeSamples = Math.max(1, Math.floor(fadeMs / 1000 * sampleRate));
 
   const writeSegment = (tone, ms) => {
@@ -605,7 +630,6 @@ function synthMorseWavBlob(morseStr, opts = {}) {
     for (let i = 0; i < n && idx < samples.length; i++) {
       let v = 0;
       if (tone) {
-        // fade in/out
         let amp = volume;
         if (i < fadeSamples) amp *= (i / fadeSamples);
         if (n - i - 1 < fadeSamples) amp *= ((n - i - 1) / fadeSamples);
@@ -627,6 +651,7 @@ function synthMorseWavBlob(morseStr, opts = {}) {
  *  ========================= */
 function clearAll() {
   stopMorsePlayback();
+  stopTurtle();
   setTxVisual(false, "IDLE");
   setStatus("Ready...");
 }
@@ -640,6 +665,9 @@ async function runDadMode() {
 
   setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
+
+  // start turtle video on transmit click
+  playTurtleOnce();
 
   try {
     const { hex } = await aesGcmEncrypt(msg, pw);
@@ -665,7 +693,6 @@ async function runDadMode() {
     morseDiv.appendChild(morseText);
     outputEl.appendChild(morseDiv);
 
-    // Buttons row
     const btnRow = document.createElement("div");
     btnRow.className = "audio-row";
 
@@ -736,7 +763,7 @@ async function decryptDadMode() {
 
     const plaintext = await aesGcmDecrypt(hex, pw);
 
-    alert(`Success!\\n\\nOriginal message:\\n${plaintext}`);
+    alert(`Success!\n\nOriginal message:\n${plaintext}`);
 
     const br = document.createElement("br");
     outputEl.appendChild(br);
@@ -748,7 +775,7 @@ async function decryptDadMode() {
     outputEl.appendChild(safe);
 
   } catch (err) {
-    alert(`Failed: ${err.message}\\n\\nLikely causes:\\n- Wrong password\\n- Incomplete/invalid Morse\\n- Typos in Morse`);
+    alert(`Failed: ${err.message}\n\nLikely causes:\n- Wrong password\n- Incomplete/invalid Morse\n- Typos in Morse`);
   }
 }
 
@@ -799,6 +826,11 @@ document.getElementById("showPw").addEventListener("change", (e) => {
 });
 document.getElementById("showDecPw").addEventListener("change", (e) => {
   document.getElementById("decryptPassword").type = e.target.checked ? "text" : "password";
+});
+
+// If the mp4 is missing, show a helpful badge state
+turtleVid?.addEventListener("error", () => {
+  setTxVisual(false, "VIDEO?");
 });
 
 setStatus("Ready...");
