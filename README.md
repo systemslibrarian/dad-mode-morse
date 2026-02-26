@@ -1,15 +1,12 @@
-# Encrypted Morse Messenger (Offline Web Tool)
+# Encrypted Morse Messenger
 
-A tiny **offline-friendly** single-page web app that:
+A tiny **offline-friendly** single-page web app that encrypts messages with
+AES-256-GCM, converts the ciphertext to Morse code, and lets you play or
+download it as a WAV audio file. Recipients can upload the WAV, decode it back
+to Morse, and decrypt the message — all in the browser, with no server
+involved.
 
-- Encrypts a message with **AES-256-GCM**
-- Encodes the ciphertext (salt + IV + ciphertext+tag) as **hex → Morse**
-- Lets you **copy/paste** the Morse string or **play it as audio beeps**
-- Lets you **download the Morse audio as a WAV file** to share
-- Lets you **upload a Morse WAV file (playback-only)** someone shared with you
-- Decrypts the Morse back to the original message using the same password
-
-> No servers. No accounts. Everything runs locally in your browser.
+> No servers. No accounts. No data leaves your browser. Works 100% offline.
 
 ---
 
@@ -19,61 +16,223 @@ A tiny **offline-friendly** single-page web app that:
 
 ---
 
-## How it works
+## Full workflow
 
-### Transmit (Encrypt → Morse)
-1. Type a message
-2. Enter a password
-3. Click **Transmit**
-4. Copy the generated Morse (or play it as beeps)
-5. Optionally click **Download Morse WAV** to save a shareable `.wav`
+```
+Sender
+  1. Type message + password → click Transmit
+  2. App encrypts with AES-256-GCM (random salt + IV every time)
+  3. Ciphertext hex → Morse code → audio beeps
+  4. Click "Download Morse WAV" → share the .wav file
 
-### Receive (Morse → Decrypt)
-1. Paste the received Morse string
-2. Enter the same password
-3. Click **Decrypt**
+Recipient
+  1. Upload the .wav file
+  2. Click "Decode WAV → Morse" → Morse string auto-populates
+  3. Enter the shared password → click Decrypt → read the message
+```
 
-### Optional: WAV Upload (playback-only)
-You can upload a `.wav` file someone shared with you to **listen to it** in the decrypt section.
-
-- This does **not** decode audio back into Morse automatically.
-- It’s meant for **playback/preview only**.
+The WAV file is **safe to share publicly** — without the correct password it is
+unreadable. The audio sounds like random beeps to anyone without the password.
 
 ---
 
-## Cryptography details
+## Step-by-step
 
-- **Algorithm:** AES-256-GCM (authenticated encryption)
-- **Key derivation:** PBKDF2-HMAC-SHA256  
-  - salt: 16 bytes (random)
-  - iterations: 150,000
-- **IV/nonce:** 12 bytes (random)
-- **Payload format (binary):** `salt (16) || iv (12) || ciphertext+tag (N)`
-- **Export format:** hex string → Morse mapping for hex digits (`0-9`, `A-F`)
+### Sender — Encrypt & transmit
+
+1. Enter your **message** and a strong **password** (8+ characters recommended)
+2. Click **Transmit**
+3. The app encrypts your message and generates the Morse string
+4. Choose one or more ways to share:
+   - **Copy Morse** — share the Morse text string directly
+   - **Play Morse Sound** — listen to the beeps (pause/resume supported)
+   - **Download Morse WAV** — save a `.wav` file to share
+
+> The **Signal** slider adds radio-style noise to the WAV for realism (lower
+> signal = more noise). Keep it at 100% for reliable decoding by the recipient.
+
+### Recipient — Decode & decrypt
+
+**Received a WAV file:**
+1. Upload it using the file picker in the decrypt section
+2. Click **Decode WAV → Morse** — the Morse string auto-fills
+3. Enter the shared password
+4. Click **Decrypt** → the original message appears
+
+**Received a Morse string:**
+1. Paste it into the *"Paste received Morse code here"* field
+2. Enter the shared password
+3. Click **Decrypt**
+
+---
+
+## Cryptography
+
+| Property | Value |
+|---|---|
+| Algorithm | AES-256-GCM (authenticated encryption with associated data) |
+| Key derivation | PBKDF2-HMAC-SHA256 |
+| KDF iterations | 150,000 |
+| Salt | 16 bytes, cryptographically random **per message** |
+| IV / nonce | 12 bytes, cryptographically random **per message** |
+| Payload layout | `salt(16 B) ‖ iv(12 B) ‖ ciphertext+tag(N B)` |
+| Encoding | binary payload → lowercase hex → Morse (hex digits `0–9`, `A–F`) |
+| Crypto engine | Browser Web Crypto API (`crypto.subtle`) — zero third-party libs |
+
+### Security properties
+
+- **Confidentiality** — AES-256 is computationally infeasible to brute-force
+- **Integrity / authenticity** — GCM authentication tag detects any tampering;
+  a wrong password or a modified byte always causes decryption to **throw**,
+  never silently returning garbage
+- **Semantic security** — random salt + random IV means the same plaintext +
+  password produces a different ciphertext every single time
+- **No key reuse** — PBKDF2 derives the AES key from password + salt; the raw
+  password is never stored or transmitted
+- **Fully auditable** — the entire application is in one file (`index.html`);
+  inspect it at any time
+
+---
+
+## WAV decoder
+
+The **Decode WAV → Morse** button analyses audio entirely in the browser:
+
+1. Decode audio to PCM (any sample rate, mono or stereo)
+2. Compute RMS energy in 5 ms frames
+3. Threshold at 15% of the 95th-percentile energy → binary tone-on/off
+4. Run-length encode the signal
+5. Estimate the dot (unit) length by finding the largest relative gap in sorted
+   on-durations — correctly handles all-dots, all-dashes, and mixed inputs
+6. Classify each run as `.` `-` letter-gap or word-gap `/`
+7. Output the Morse string into the decrypt field
+
+Works reliably on WAV files generated by this app at 100% signal quality.
+Heavily degraded (noisy) audio may introduce symbol errors.
 
 ---
 
 ## Files
 
-This repo is intentionally minimal:
+| File | Purpose |
+|---|---|
+| `index.html` | The entire app — HTML, CSS, and JS in one self-contained file |
+| `turtle.png` | Header image and video poster |
+| `turtle.mp4` | Transmit animation (plays while sending) |
+| `test_crypto.mjs` | Encryption/decryption test suite (Node.js, Web Crypto API) |
+| `test_decode.py` | Morse WAV decode test suite (Python 3, stdlib only) |
 
-- `index.html` — the entire app (HTML + CSS + JS)
-- `turtle.png` — header image + video poster
-- `turtle.mp4` — transmit animation video
-
-> GitHub Pages is case-sensitive: make sure filenames are exactly `turtle.png` and `turtle.mp4`.
+> GitHub Pages is case-sensitive — filenames must match exactly: `turtle.png`, `turtle.mp4`.
 
 ---
 
 ## Run locally
 
-### Option A: just open the file
-1. Download / clone the repo
-2. Double-click `index.html` to open it in your browser
+### Option A: open the file directly
 
-### Option B: run a tiny local server (recommended)
-Some browsers restrict clipboard/audio in `file://` mode.
+1. Clone or download the repo
+2. Double-click `index.html`
+
+### Option B: local dev server (recommended)
+
+Some browsers restrict the clipboard API and AudioContext in `file://` mode.
 
 **Python:**
 ```bash
-python -m http.server 8000
+python3 -m http.server 8080
+# open http://localhost:8080
+```
+
+**Node.js:**
+```bash
+npx serve .
+# open http://localhost:3000
+```
+
+---
+
+## Tests
+
+### Encryption tests — `test_crypto.mjs`
+
+Uses the **exact same Web Crypto API** as the browser (built into Node.js 15+).
+No dependencies required.
+
+```bash
+node test_crypto.mjs
+```
+
+| # | What is tested |
+|---|---|
+| 1 | Encrypt + decrypt round-trip (correct password recovers plaintext) |
+| 2 | Wrong password is always rejected by the AES-GCM authentication tag |
+| 3 | Random salt + IV — same message/password produces a different ciphertext every time |
+| 4 | Hex ↔ Morse conversion is perfectly lossless (all 16 hex digits covered) |
+| 5 | Full pipeline: encrypt → hex → Morse → hex → decrypt |
+| 6 | Unicode / emoji / CJK characters survive the full round-trip correctly |
+| 7 | Empty string is handled without errors |
+| 8 | Long message (1000 chars) round-trips correctly |
+| 9 | Tampered ciphertext is rejected by the GCM integrity check |
+| 10 | Payload binary layout — salt/IV/ciphertext byte offsets are correct |
+| 11 | Morse output contains only valid hex Morse symbols |
+| 12 | All 16 hex characters map to unique, non-overlapping Morse codes |
+
+### WAV decode tests — `test_decode.py`
+
+Synthesises WAV data using the same parameters as the JS app (44100 Hz, 700 Hz
+tone, 60 ms unit), then runs the decode algorithm and compares output.
+Python 3 standard library only — no dependencies required.
+
+```bash
+python3 test_decode.py
+```
+
+| # | What is tested |
+|---|---|
+| 1 | Normal mixed dots/dashes: A B C D E F |
+| 2 | SOS-like pattern |
+| 3 | Digits 1 2 3 4 |
+| 4 | All-dashes — unimodal long input (hex `0` = `-----`) |
+| 5 | All-dots — unimodal short input (hex `5` = `.....`) |
+| 6 | Single character |
+| 7 | Dash-heavy mixed pattern (1 0 1 0) |
+| 8 | Cipher-like mixed long string |
+| 9 | WAV with added leading/trailing silence is decoded correctly |
+| 10 | Stereo WAV (two-channel) decodes to same result as mono |
+
+### Run all tests
+
+```bash
+node test_crypto.mjs && python3 test_decode.py
+```
+
+Both suites exit with code `0` on success and `1` on failure, so they work in CI.
+
+---
+
+## Security considerations
+
+- **Use a strong, unique password.** The security of your message depends
+  entirely on the password. Short or common passwords are the only real
+  weakness in this system.
+- **Share the password out-of-band.** Don't send the password in the same
+  channel as the WAV file.
+- **Audio duration leaks approximate message length.** WAV duration is
+  proportional to ciphertext length. This is an inherent property of the
+  Morse-audio transport — not a flaw in the cryptography.
+- **PBKDF2 at 150k iterations** makes offline brute-force expensive but not
+  impossible for very short passwords. Use 12+ random characters for sensitive
+  messages.
+
+---
+
+## Browser compatibility
+
+Requires a modern browser with Web Crypto API support (all evergreen browsers
+since ~2020: Chrome, Firefox, Safari, Edge).
+
+---
+
+## License
+
+MIT — do whatever you like, no warranty.

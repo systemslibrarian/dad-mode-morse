@@ -328,9 +328,10 @@
   <div class="instructions">
     <strong>How to use:</strong><br>
     1. Enter message + password.<br>
-    2. Click <strong>Transmit</strong> → Morse generated (turtle video plays).<br>
+    2. Click <strong>Transmit</strong> &rarr; Morse generated (turtle video plays).<br>
     3. Copy Morse, play audio, or download the audio WAV.<br>
-    4. Paste Morse in the bottom section + same password → decrypt.<br><br>
+    4. Share the WAV or the Morse string with the recipient.<br>
+    5. Recipient uploads the WAV and clicks <strong>Decode WAV &rarr; Morse</strong>, or pastes the Morse string directly, then enters the same password and clicks <strong>Decrypt</strong>.<br><br>
     <em>Security:</em> AES-256-GCM with random salt/IV + authentication (PBKDF2-SHA256).
   </div>
 
@@ -371,13 +372,14 @@
 
   <div class="decrypt-section">
     <div class="mini" style="margin-bottom:10px;">
-      Optional: upload a Morse WAV someone shared to you (playback only).
+      Upload a Morse WAV to play it back or click <strong>Decode WAV &rarr; Morse</strong> to extract the Morse code automatically.
     </div>
     <div class="audio-row">
       <input id="audioUpload" type="file" accept="audio/wav,audio/*" />
       <span id="audioUploadName" class="file-chip">No audio loaded</span>
       <button id="playUploadedBtn" disabled>Play Uploaded Audio</button>
       <button id="stopUploadedBtn" disabled>Stop Uploaded Audio</button>
+      <button id="decodeWavBtn" disabled>Decode WAV → Morse</button>
     </div>
     <audio id="uploadedAudio" controls style="width:100%; margin-top:10px; display:none;"></audio>
 
@@ -537,7 +539,7 @@ async function playTurtleDuringTx(minMs = 3000) {
   try {
     if (!turtleTxVid) return;
 
-    turtleTxVid.loop = true;
+    turtleTxVid.loop = false;
     turtleTxVid.muted = true;
     turtleTxVid.playsInline = true;
     turtleTxVid.playbackRate = 0.85;
@@ -547,17 +549,20 @@ async function playTurtleDuringTx(minMs = 3000) {
       turtleTxStopTimer = null;
     }
 
+    // remove any previous ended listener to avoid duplicates
+    turtleTxVid.removeEventListener("ended", stopTurtleTx);
+
     // start from the beginning
     turtleTxVid.currentTime = 0;
 
     // wait until browser says it can play
     await waitForCanPlay(turtleTxVid, 7000);
 
+    // stop when the video finishes playing
+    turtleTxVid.addEventListener("ended", stopTurtleTx, { once: true });
+
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
-
-    // keep it visible long enough to notice
-    turtleTxStopTimer = setTimeout(() => stopTurtleTx(), minMs);
 
   } catch (e) {
     console.warn("Turtle TX video play failed:", e);
@@ -1003,13 +1008,14 @@ async function decryptDadMode() {
 }
 
 /** =========================
- *  Uploaded WAV playback
+ *  Uploaded WAV playback + decode
  *  ========================= */
 const audioUpload = document.getElementById("audioUpload");
 const uploadedAudio = document.getElementById("uploadedAudio");
 const audioUploadName = document.getElementById("audioUploadName");
 const playUploadedBtn = document.getElementById("playUploadedBtn");
 const stopUploadedBtn = document.getElementById("stopUploadedBtn");
+const decodeWavBtn = document.getElementById("decodeWavBtn");
 
 audioUpload.addEventListener("change", () => {
   const file = audioUpload.files && audioUpload.files[0];
@@ -1018,6 +1024,7 @@ audioUpload.addEventListener("change", () => {
     uploadedAudio.style.display = "none";
     playUploadedBtn.disabled = true;
     stopUploadedBtn.disabled = true;
+    decodeWavBtn.disabled = true;
     return;
   }
   audioUploadName.textContent = file.name;
@@ -1026,7 +1033,8 @@ audioUpload.addEventListener("change", () => {
   uploadedAudio.style.display = "block";
   playUploadedBtn.disabled = false;
   stopUploadedBtn.disabled = false;
-  showToast("Playback only \u2014 WAV files can\u2019t be decoded back to Morse here.");
+  decodeWavBtn.disabled = false;
+  showToast("Audio loaded \u2014 click \u201CDecode WAV \u2192 Morse\u201D to extract Morse code.");
 });
 
 playUploadedBtn.addEventListener("click", () => {
@@ -1037,6 +1045,131 @@ stopUploadedBtn.addEventListener("click", () => {
   uploadedAudio.pause();
   uploadedAudio.currentTime = 0;
 });
+
+decodeWavBtn.addEventListener("click", () => {
+  const file = audioUpload.files && audioUpload.files[0];
+  if (file) decodeMorseWav(file);
+});
+
+/**
+ * Decode a Morse WAV file into a Morse string and populate the decrypt input.
+ * Works by computing RMS energy in short frames, thresholding to get
+ * tone-on/tone-off runs, then classifying by duration into dots, dashes, and gaps.
+ */
+async function decodeMorseWav(file) {
+  decodeWavBtn.disabled = true;
+  decodeWavBtn.textContent = "Decoding\u2026";
+  showToast("Analysing audio\u2026");
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let audioBuffer;
+    try {
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    } finally {
+      audioCtx.close();
+    }
+
+    // Mix down to mono
+    const sampleRate = audioBuffer.sampleRate;
+    const numChannels = audioBuffer.numberOfChannels;
+    const length = audioBuffer.length;
+    const mono = new Float32Array(length);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const data = audioBuffer.getChannelData(ch);
+      for (let i = 0; i < length; i++) mono[i] += data[i] / numChannels;
+    }
+
+    // RMS energy in 5 ms frames
+    const frameMs = 5;
+    const frameSamples = Math.max(1, Math.floor(sampleRate * frameMs / 1000));
+    const numFrames = Math.floor(length / frameSamples);
+    const energy = new Float32Array(numFrames);
+    for (let f = 0; f < numFrames; f++) {
+      const start = f * frameSamples;
+      let sum = 0;
+      for (let i = 0; i < frameSamples; i++) {
+        const v = mono[start + i];
+        sum += v * v;
+      }
+      energy[f] = Math.sqrt(sum / frameSamples);
+    }
+
+    // Threshold at 15% of the 95th-percentile energy value
+    const sorted = Array.from(energy).sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    const threshold = p95 * 0.15;
+    if (p95 < 1e-5) throw new Error("Audio appears silent — is this a Morse WAV?");
+
+    // Binary on/off
+    const binary = Array.from(energy).map(e => e > threshold ? 1 : 0);
+
+    // Run-length encoding → [{val, ms}]
+    const runs = [];
+    let cur = binary[0], count = 1;
+    for (let i = 1; i < binary.length; i++) {
+      if (binary[i] === cur) { count++; }
+      else { runs.push({ val: cur, ms: count * frameMs }); cur = binary[i]; count = 1; }
+    }
+    runs.push({ val: cur, ms: count * frameMs });
+
+    // Strip leading/trailing silence
+    while (runs.length && runs[0].val === 0) runs.shift();
+    while (runs.length && runs[runs.length - 1].val === 0) runs.pop();
+    if (!runs.length) throw new Error("No tone detected — is this a Morse WAV?");
+
+    // Estimate unit (dot) length from ON durations.
+    // Strategy: find the largest relative jump in sorted ON durations — that gap
+    // marks the dot/dash boundary. Take the mean of the lower (dot) cluster.
+    // Falls back gracefully when all symbols are the same type.
+    const onDurs = runs.filter(r => r.val === 1).map(r => r.ms).sort((a, b) => a - b);
+    let rawUnit = MorseTiming.unitMs;
+    if (onDurs.length) {
+      const medDur = onDurs[Math.floor(onDurs.length / 2)];
+      let maxRatio = 1, splitIdx = -1;
+      for (let i = 0; i < onDurs.length - 1; i++) {
+        const ratio = onDurs[i + 1] / (onDurs[i] || 1);
+        if (ratio > maxRatio) { maxRatio = ratio; splitIdx = i + 1; }
+      }
+      if (maxRatio > 1.8 && splitIdx > 0) {
+        // bimodal: lower cluster = dots
+        const dotCluster = onDurs.slice(0, splitIdx);
+        rawUnit = Math.round(dotCluster.reduce((s, v) => s + v, 0) / dotCluster.length);
+      } else if (medDur > 100) {
+        rawUnit = Math.round(medDur / 3); // unimodal long → all dashes
+      } else {
+        rawUnit = medDur; // unimodal short → all dots
+      }
+    }
+    const unitMs = Math.max(20, rawUnit);
+
+    // Classify runs
+    let morse = "";
+    for (const r of runs) {
+      if (r.val === 1) {
+        morse += r.ms < unitMs * 2 ? "." : "-";
+      } else {
+        if      (r.ms < unitMs * 2) { /* element gap — skip */ }
+        else if (r.ms < unitMs * 5) { morse += " "; }   // letter gap
+        else                        { morse += " / "; }  // word gap
+      }
+    }
+
+    morse = morse.trim().replace(/\s*\/\s*/g, " / ").replace(/  +/g, " ");
+    if (!morse) throw new Error("Could not extract Morse symbols from audio");
+
+    document.getElementById("morseInput").value = morse;
+    document.getElementById("morseInput").scrollIntoView({ behavior: "smooth" });
+    showToast("Decoded! Morse pasted below \u2014 enter password and click Decrypt.", 5000);
+
+  } catch (e) {
+    showToast("Decode failed: " + (e?.message || String(e)), 5000);
+  } finally {
+    decodeWavBtn.disabled = false;
+    decodeWavBtn.textContent = "Decode WAV \u2192 Morse";
+  }
+}
 
 /** =========================
  *  Toast notification
