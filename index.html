@@ -9,14 +9,14 @@
       font-family: Arial, sans-serif;
       background: #0a0a0a;
       color: #00ff88;
-      padding: 30px;
+      padding: 22px;
       max-width: 1000px;
       margin: auto;
       line-height: 1.6;
     }
-    h1 { text-align: center; margin-bottom: 10px; }
-    .subtitle { text-align: center; color: #88ffcc; margin-bottom: 30px; }
-    .container { background: #111; padding: 25px; border-radius: 12px; border: 1px solid #00ff88; }
+    h1 { text-align: center; margin: 12px 0 8px; }
+    .subtitle { text-align: center; color: #88ffcc; margin-bottom: 18px; }
+    .container { background: #111; padding: 22px; border-radius: 12px; border: 1px solid #00ff88; }
     label { display: block; margin: 15px 0 5px; font-weight: bold; }
 
     input[type="text"], input[type="password"], textarea {
@@ -36,105 +36,167 @@
     .row { display:flex; gap:10px; flex-wrap: wrap; }
 
     button {
-      padding: 12px 24px;
+      padding: 12px 18px;
       background: #00ff88;
       color: black;
       border: none;
       border-radius: 6px;
       font-weight: bold;
       cursor: pointer;
-      margin: 10px 5px 10px 0;
+      margin: 10px 6px 10px 0;
     }
     button:hover { background: #33ffaa; }
     button.paused { background: #ffaa00; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* ===== Turtle transmitter visual ===== */
-    .tx-visual {
-      margin: 18px 0 8px;
+    /* ===== Turtle header ===== */
+    .hero {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 14px 14px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(0,255,136,0.06), rgba(0,0,0,0));
+      border: 1px solid rgba(0,255,136,0.25);
+      margin-bottom: 14px;
+    }
+    .hero-left {
       display: flex;
       align-items: center;
       gap: 14px;
+      min-width: 0;
+      flex: 1 1 auto;
     }
-
     #turtleImg {
-      width: 120px;
+      width: 170px;
       height: auto;
-      border-radius: 14px;
+      border-radius: 16px;
+      background: #000;
       box-shadow: 0 0 0 rgba(0,255,136,0);
       transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
-      background: #000; /* helps if image has transparency */
+      flex: 0 0 auto;
     }
-
+    .hero-text { min-width: 0; }
+    .hero-title {
+      font-size: 28px;
+      font-weight: 800;
+      margin: 0;
+      line-height: 1.2;
+    }
+    .hero-sub {
+      margin: 6px 0 0;
+      color: #88ffcc;
+      font-family: monospace;
+      opacity: 0.95;
+    }
     .tx-badge {
       font-family: monospace;
       font-weight: bold;
-      padding: 6px 10px;
+      padding: 8px 12px;
       border-radius: 999px;
       border: 1px solid #00aa66;
       color: #88ffcc;
       background: #0b140b;
+      flex: 0 0 auto;
+      text-align: center;
+      min-width: 92px;
     }
-
     .tx-on #turtleImg {
       animation: txPulse 0.9s infinite ease-in-out;
       filter: brightness(1.15) saturate(1.2);
-      box-shadow: 0 0 18px rgba(0,255,136,0.25);
+      box-shadow: 0 0 22px rgba(0,255,136,0.25);
     }
-
     .tx-on .tx-badge {
       color: #00ff88;
       border-color: #00ff88;
       background: #041a10;
     }
-
     @keyframes txPulse {
       0%, 100% { transform: scale(1.00); }
       50%      { transform: scale(1.06); }
     }
-    /* ===== end turtle visual ===== */
+    /* responsive */
+    @media (max-width: 640px) {
+      .hero { flex-direction: column; align-items: flex-start; }
+      #turtleImg { width: 100%; max-width: 320px; }
+      .tx-badge { align-self: stretch; }
+      .hero-title { font-size: 24px; }
+    }
+    /* ===== end turtle header ===== */
 
     #output {
       background: #000;
-      padding: 20px;
+      padding: 18px;
       border-radius: 8px;
       border: 1px solid #004d33;
       min-height: 220px;
       white-space: pre-wrap;
       font-family: monospace;
-      margin-top: 20px;
+      margin-top: 14px;
       overflow-y: auto;
-      max-height: 500px;
+      max-height: 540px;
     }
 
     #morseOutput { margin: 15px 0; font-size: 18px; word-break: break-word; color: #ccffdd; }
-    .copy-btn { font-size: 14px; padding: 8px 16px; }
+    .copy-btn { font-size: 14px; padding: 8px 14px; }
     .status { color: #88ffcc; font-weight: bold; }
     .error { color: #ff6666; font-weight: bold; }
 
     .instructions { background: #1a2a1a; padding: 12px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #00ff88; }
     .decrypt-section {
-      margin-top: 60px;
-      padding: 30px 20px;
+      margin-top: 46px;
+      padding: 22px 18px;
       background: #0d1a0d;
       border-radius: 10px;
       border: 1px solid #006633;
     }
     .mini { font-size: 0.95em; color:#88ffcc; }
     .hr { height: 1px; background:#0a3; opacity: 0.4; margin: 14px 0; }
+
+    .audio-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 10px;
+    }
+    .file-chip {
+      border: 1px solid rgba(0,255,136,0.35);
+      background: rgba(0,0,0,0.25);
+      color: #88ffcc;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    a.download-link {
+      display: inline-block;
+      text-decoration: none;
+    }
+    a.download-link button { margin: 0; }
   </style>
 </head>
 <body>
 
-<h1>Encrypted Morse Messenger</h1>
-<p class="subtitle">Encrypt → Morse code → play beeps (pause/resume/stop) → decrypt</p>
-
 <div class="container">
+  <!-- Turtle header / always visible at top -->
+  <div class="hero" id="txVisual">
+    <div class="hero-left">
+      <!-- Put turtle.png next to index.html in your repo -->
+      <img id="turtleImg" src="./turtle.png" alt="Turtle transmitting Morse code" />
+      <div class="hero-text">
+        <div class="hero-title">Encrypted Morse Messenger</div>
+        <div class="hero-sub">Encrypt → Morse → Beep audio (pause/resume/stop) → Decrypt</div>
+      </div>
+    </div>
+    <div id="txBadge" class="tx-badge" aria-live="polite">IDLE</div>
+  </div>
+
   <div class="instructions">
     <strong>How to use:</strong><br>
     1. Enter message + password.<br>
     2. Click <strong>Transmit</strong> → Morse generated.<br>
-    3. Copy Morse or play audio beeps (pause/resume/stop).<br>
+    3. Copy Morse, play audio, or download the audio WAV.<br>
     4. Paste Morse in the bottom section + same password → decrypt.<br><br>
     <em>Security:</em> AES-256-GCM with random salt/IV + authentication (PBKDF2-SHA256).
   </div>
@@ -151,15 +213,9 @@
     </label>
   </div>
 
-  <div class="row" style="margin: 18px 0;">
+  <div class="row" style="margin: 12px 0;">
     <button id="txBtn">Transmit</button>
     <button id="clearBtn">Clear</button>
-  </div>
-
-  <!-- Turtle transmitter visual -->
-  <div class="tx-visual" id="txVisual">
-    <img id="turtleImg" src="turtle.png" alt="Turtle transmitting Morse code" />
-    <div id="txBadge" class="tx-badge" aria-live="polite">IDLE</div>
   </div>
 
   <div id="output"></div>
@@ -180,9 +236,20 @@
     <label for="morseInput">Paste received Morse code here:</label>
     <textarea id="morseInput" rows="5" placeholder="Paste the full Morse string here..."></textarea>
 
-    <div style="margin-top: 20px;">
+    <div class="row" style="margin-top: 10px;">
       <button id="decBtn">Decrypt</button>
     </div>
+
+    <div class="mini" style="margin-top:10px;">
+      Optional: upload a Morse WAV someone shared to you (playback only).
+    </div>
+    <div class="audio-row">
+      <input id="audioUpload" type="file" accept="audio/wav,audio/*" />
+      <span id="audioUploadName" class="file-chip">No audio loaded</span>
+      <button id="playUploadedBtn" disabled>Play Uploaded Audio</button>
+      <button id="stopUploadedBtn" disabled>Stop Uploaded Audio</button>
+    </div>
+    <audio id="uploadedAudio" controls style="width:100%; margin-top:10px; display:none;"></audio>
   </div>
 </div>
 
@@ -205,7 +272,7 @@ function toMorseHex(hex) {
 }
 
 function morseToHex(morse) {
-  const groups = morse.trim().split(/\s+/).filter(Boolean);
+  const groups = morse.trim().split(/\\s+/).filter(Boolean);
   let hex = '';
   let invalid = false;
   for (const g of groups) {
@@ -283,7 +350,7 @@ function setTxVisual(on, label) {
   if (on) container.classList.add("tx-on");
   else container.classList.remove("tx-on");
 
-  badge.textContent = label || (on ? "TRANSMITTING" : "IDLE");
+  badge.textContent = label || (on ? "TRANSMIT" : "IDLE");
 }
 
 /** =========================
@@ -309,7 +376,7 @@ function appendLine(label, value) {
 }
 
 /** =========================
- *  AUDIO ENGINE
+ *  AUDIO ENGINE (live beeps)
  *  ========================= */
 const MorseTiming = {
   unitMs: 60,
@@ -454,6 +521,108 @@ async function toggleMorsePlayback(morseStr) {
 }
 
 /** =========================
+ *  WAV export (downloadable)
+ *  ========================= */
+function buildMorseTimelineMs(morseStr, unitMs) {
+  const dot = unitMs;
+  const dash = unitMs * 3;
+  const elemGap = unitMs;       // after dot/dash
+  const letterGap = unitMs * 3; // for spaces
+  const wordGap = unitMs * 7;   // for "/"
+  const timeline = [];
+  for (const sym of morseStr) {
+    if (sym === ".") {
+      timeline.push({ tone: true, ms: dot });
+      timeline.push({ tone: false, ms: elemGap });
+    } else if (sym === "-") {
+      timeline.push({ tone: true, ms: dash });
+      timeline.push({ tone: false, ms: elemGap });
+    } else if (sym === " ") {
+      timeline.push({ tone: false, ms: letterGap });
+    } else if (sym === "/") {
+      timeline.push({ tone: false, ms: wordGap });
+    }
+  }
+  // trim trailing silence
+  while (timeline.length && timeline[timeline.length - 1].tone === false) timeline.pop();
+  return timeline;
+}
+
+function floatTo16BitPCM(view, offset, input) {
+  for (let i = 0; i < input.length; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, input[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+}
+
+function writeString(view, offset, str) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);      // PCM
+  view.setUint16(20, 1, true);       // format
+  view.setUint16(22, 1, true);       // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);       // block align
+  view.setUint16(34, 16, true);      // bits
+  writeString(view, 36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  floatTo16BitPCM(view, 44, samples);
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+function synthMorseWavBlob(morseStr, opts = {}) {
+  const sampleRate = opts.sampleRate || 44100;
+  const freq = opts.freqHz || MorseTiming.freqHz;
+  const unit = opts.unitMs || MorseTiming.unitMs;
+  const volume = (typeof opts.volume === "number") ? opts.volume : 0.35;
+
+  const timeline = buildMorseTimelineMs(morseStr, unit);
+  const totalMs = timeline.reduce((a, x) => a + x.ms, 0);
+  const totalSamples = Math.ceil(totalMs / 1000 * sampleRate);
+  const samples = new Float32Array(totalSamples);
+
+  let idx = 0;
+  let phase = 0;
+  const phaseInc = 2 * Math.PI * freq / sampleRate;
+  const fadeMs = Math.min(6, unit * 0.2); // small fade to avoid clicks
+  const fadeSamples = Math.max(1, Math.floor(fadeMs / 1000 * sampleRate));
+
+  const writeSegment = (tone, ms) => {
+    const n = Math.floor(ms / 1000 * sampleRate);
+    for (let i = 0; i < n && idx < samples.length; i++) {
+      let v = 0;
+      if (tone) {
+        // fade in/out
+        let amp = volume;
+        if (i < fadeSamples) amp *= (i / fadeSamples);
+        if (n - i - 1 < fadeSamples) amp *= ((n - i - 1) / fadeSamples);
+        v = Math.sin(phase) * amp;
+        phase += phaseInc;
+        if (phase > 2*Math.PI) phase -= 2*Math.PI;
+      }
+      samples[idx++] = v;
+    }
+  };
+
+  for (const seg of timeline) writeSegment(seg.tone, seg.ms);
+
+  return encodeWAV(samples, sampleRate);
+}
+
+/** =========================
  *  UI: TRANSMIT / CLEAR / DECRYPT
  *  ========================= */
 function clearAll() {
@@ -469,7 +638,7 @@ async function runDadMode() {
   if (!msg) { setStatus("Enter message", "error"); return; }
   if (!pw || pw.length < 8) { setStatus("Longer password recommended (8+)", "error"); return; }
 
-  setTxVisual(true, "ENCRYPTING");
+  setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
 
   try {
@@ -477,8 +646,8 @@ async function runDadMode() {
     const morse = toMorseHex(hex);
 
     outputEl.innerHTML = "";
-    appendLine("Encrypted hex (shortened):", `${hex.slice(0,80)}... (${hex.length} chars)`);
 
+    appendLine("Encrypted hex (shortened):", `${hex.slice(0,80)}... (${hex.length} chars)`);
     const hr = document.createElement("div");
     hr.className = "hr";
     outputEl.appendChild(hr);
@@ -496,6 +665,10 @@ async function runDadMode() {
     morseDiv.appendChild(morseText);
     outputEl.appendChild(morseDiv);
 
+    // Buttons row
+    const btnRow = document.createElement("div");
+    btnRow.className = "audio-row";
+
     const copyBtn = document.createElement("button");
     copyBtn.className = "copy-btn";
     copyBtn.textContent = "Copy Morse";
@@ -503,7 +676,6 @@ async function runDadMode() {
       await navigator.clipboard.writeText(morse);
       alert("Copied!");
     });
-    outputEl.appendChild(copyBtn);
 
     const playPauseBtn = document.createElement("button");
     playPauseBtn.id = "playPauseBtn";
@@ -511,14 +683,37 @@ async function runDadMode() {
     playPauseBtn.addEventListener("click", () => {
       toggleMorsePlayback(morse).catch(err => alert("Audio error: " + err.message));
     });
-    outputEl.appendChild(playPauseBtn);
 
     const stopBtn = document.createElement("button");
     stopBtn.id = "stopBtn";
     stopBtn.textContent = "Stop";
     stopBtn.disabled = true;
     stopBtn.addEventListener("click", stopMorsePlayback);
-    outputEl.appendChild(stopBtn);
+
+    const wavBtn = document.createElement("button");
+    wavBtn.textContent = "Download Morse WAV";
+    wavBtn.addEventListener("click", () => {
+      try {
+        const blob = synthMorseWavBlob(morse, { unitMs: MorseTiming.unitMs, freqHz: MorseTiming.freqHz });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `morse_${new Date().toISOString().replace(/[:.]/g,'-')}.wav`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      } catch (e) {
+        alert("Could not generate WAV: " + (e?.message || String(e)));
+      }
+    });
+
+    btnRow.appendChild(copyBtn);
+    btnRow.appendChild(playPauseBtn);
+    btnRow.appendChild(stopBtn);
+    btnRow.appendChild(wavBtn);
+
+    outputEl.appendChild(btnRow);
 
     setTxVisual(false, "READY");
 
@@ -541,7 +736,7 @@ async function decryptDadMode() {
 
     const plaintext = await aesGcmDecrypt(hex, pw);
 
-    alert(`Success!\n\nOriginal message:\n${plaintext}`);
+    alert(`Success!\\n\\nOriginal message:\\n${plaintext}`);
 
     const br = document.createElement("br");
     outputEl.appendChild(br);
@@ -553,9 +748,44 @@ async function decryptDadMode() {
     outputEl.appendChild(safe);
 
   } catch (err) {
-    alert(`Failed: ${err.message}\n\nLikely causes:\n- Wrong password\n- Incomplete/invalid Morse\n- Typos in Morse`);
+    alert(`Failed: ${err.message}\\n\\nLikely causes:\\n- Wrong password\\n- Incomplete/invalid Morse\\n- Typos in Morse`);
   }
 }
+
+/** =========================
+ *  Uploaded WAV playback
+ *  ========================= */
+const audioUpload = document.getElementById("audioUpload");
+const uploadedAudio = document.getElementById("uploadedAudio");
+const audioUploadName = document.getElementById("audioUploadName");
+const playUploadedBtn = document.getElementById("playUploadedBtn");
+const stopUploadedBtn = document.getElementById("stopUploadedBtn");
+
+audioUpload.addEventListener("change", () => {
+  const file = audioUpload.files && audioUpload.files[0];
+  if (!file) {
+    audioUploadName.textContent = "No audio loaded";
+    uploadedAudio.style.display = "none";
+    playUploadedBtn.disabled = true;
+    stopUploadedBtn.disabled = true;
+    return;
+  }
+  audioUploadName.textContent = file.name;
+  const url = URL.createObjectURL(file);
+  uploadedAudio.src = url;
+  uploadedAudio.style.display = "block";
+  playUploadedBtn.disabled = false;
+  stopUploadedBtn.disabled = false;
+});
+
+playUploadedBtn.addEventListener("click", () => {
+  uploadedAudio.play().catch(() => {});
+});
+
+stopUploadedBtn.addEventListener("click", () => {
+  uploadedAudio.pause();
+  uploadedAudio.currentTime = 0;
+});
 
 /** =========================
  *  Wire up controls
