@@ -180,7 +180,7 @@
   <div class="hero" id="txVisual">
     <div class="hero-left">
       <!-- Put turtle.mp4 (and optionally turtle.png) next to index.html in your repo -->
-      <video id="turtleVid" preload="auto" muted playsinline poster="./turtle.png">
+      <video id="turtleVid" preload="auto" muted playsinline poster="./turtle.png" controls>
         <source src="./turtle.mp4" type="video/mp4" />
         Your browser does not support the video tag.
       </video>
@@ -357,23 +357,35 @@ function setTxVisual(on, label) {
 }
 
 async function playTurtleOnce() {
-  // Start the attached turtle video from the beginning when user clicks Transmit.
-  // Keep muted to avoid autoplay restrictions and unexpected sound.
+  // Play the turtle video on Transmit click. Robust against “not ready yet”.
   try {
     if (!turtleVid) return;
+
+    // Make it clearly visible that it’s animating
+    turtleVid.loop = true;
+
+    // Force reload of metadata if needed
+    turtleVid.loop = false;
     turtleVid.pause();
     turtleVid.currentTime = 0;
-    // Some browsers need a tiny delay when resetting currentTime
-    await new Promise(r => setTimeout(r, 10));
-    await turtleVid.play();
-  } catch (_) {
-    // ignore; video playback can fail if file missing or policy blocks
+    turtleVid.load();
+
+    // Wait a tick so the browser applies currentTime/load changes
+    await new Promise(r => requestAnimationFrame(() => r()));
+
+    const p = turtleVid.play();
+    if (p && typeof p.then === "function") await p;
+
+  } catch (e) {
+    console.warn("Turtle video play failed:", e);
+    setTxVisual(false, "NO PLAY");
   }
 }
 
 function stopTurtle() {
   try {
     if (!turtleVid) return;
+    turtleVid.loop = false;
     turtleVid.pause();
     turtleVid.currentTime = 0;
   } catch (_) {}
