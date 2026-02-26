@@ -67,7 +67,7 @@
       flex: 1 1 auto;
     }
     #turtleHeaderImg{
-      width: 240px;          /* bigger header image */
+      width: 260px;          /* bigger header image */
       max-width: 100%;
       height: auto;
       border-radius: 16px;
@@ -100,7 +100,7 @@
       background: #0b140b;
       flex: 0 0 auto;
       text-align: center;
-      min-width: 92px;
+      min-width: 104px;
     }
     .tx-on .tx-badge {
       color: #00ff88;
@@ -109,13 +109,13 @@
     }
     @media (max-width: 640px) {
       .hero { flex-direction: column; align-items: flex-start; }
-      #turtleHeaderImg { width: 100%; max-width: 360px; }
+      #turtleHeaderImg { width: 100%; max-width: 380px; }
       .tx-badge { align-self: stretch; }
       .hero-title { font-size: 24px; }
     }
     /* ===== end hero ===== */
 
-    /* ===== Transmit row with small MP4 next to Transmit ===== */
+    /* ===== Transmit row with MP4 next to Transmit ===== */
     .tx-row{
       display:flex;
       align-items:center;
@@ -123,6 +123,10 @@
       gap:16px;
       flex-wrap:wrap;
       margin: 12px 0;
+      padding: 10px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(0,255,136,0.18);
+      background: rgba(0,0,0,0.12);
     }
     .tx-row-left{
       display:flex;
@@ -131,7 +135,7 @@
       flex-wrap:wrap;
     }
     #turtleTxVid{
-      width: 220px;
+      width: 240px;
       max-width: 100%;
       height: auto;
       border-radius: 14px;
@@ -378,45 +382,66 @@ function setTxVisual(on, label) {
 }
 
 /** =========================
- *  TURTLE TX VIDEO (next to Transmit)
+ *  TURTLE TX VIDEO (next to Transmit) - reliable play
  *  ========================= */
 const turtleTxVid = document.getElementById("turtleTxVid");
 let turtleTxStopTimer = null;
 
-async function playTurtleDuringTx(minMs = 2500) {
+function waitForCanPlay(video, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    if (!video) return reject(new Error("No video element"));
+
+    // HAVE_FUTURE_DATA or better
+    if (video.readyState >= 3) return resolve();
+
+    const onCanPlay = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error("Video error loading")); };
+
+    const t = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for video to be ready"));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(t);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("error", onError);
+    }
+
+    video.addEventListener("canplay", onCanPlay, { once: true });
+    video.addEventListener("error", onError, { once: true });
+  });
+}
+
+async function playTurtleDuringTx(minMs = 3000) {
   try {
     if (!turtleTxVid) return;
 
-    // Make it visibly animate (slightly slower playback + loop).
     turtleTxVid.loop = true;
     turtleTxVid.muted = true;
     turtleTxVid.playsInline = true;
-    turtleTxVid.playbackRate = 0.75;
+    turtleTxVid.playbackRate = 0.85;
 
-    // Cancel any previous scheduled stop
     if (turtleTxStopTimer) {
       clearTimeout(turtleTxStopTimer);
       turtleTxStopTimer = null;
     }
 
-    // Start from the beginning
-    turtleTxVid.pause();
+    // start from the beginning
     turtleTxVid.currentTime = 0;
 
-    // Some browsers behave better if we call load() before play()
-    turtleTxVid.load();
-    await new Promise(r => requestAnimationFrame(r));
+    // wait until browser says it can play
+    await waitForCanPlay(turtleTxVid, 7000);
 
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
 
-    // Ensure it stays playing long enough to notice, even if encryption finishes instantly.
-    turtleTxStopTimer = setTimeout(() => {
-      stopTurtleTx();
-    }, minMs);
+    // keep it visible long enough to notice
+    turtleTxStopTimer = setTimeout(() => stopTurtleTx(), minMs);
 
   } catch (e) {
     console.warn("Turtle TX video play failed:", e);
+    setTxVisual(false, "NO VIDEO");
   }
 }
 
@@ -717,8 +742,8 @@ async function runDadMode() {
   setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
 
-  // play the MP4 next to the Transmit button
-  playTurtleDuringTx();
+  // play the MP4 next to the Transmit button (reliably)
+  playTurtleDuringTx(3000);
 
   try {
     const { hex } = await aesGcmEncrypt(msg, pw);
@@ -879,7 +904,7 @@ document.getElementById("showDecPw").addEventListener("change", (e) => {
   document.getElementById("decryptPassword").type = e.target.checked ? "text" : "password";
 });
 
-// If the mp4 is missing, show a hint in console.
+// Helpful console hint if video fails to load
 turtleTxVid?.addEventListener("error", () => console.warn("turtle.mp4 failed to load (check filename/path)."));
 
 setStatus("Ready...");
