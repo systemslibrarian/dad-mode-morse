@@ -49,6 +49,51 @@
     button.paused { background: #ffaa00; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* ===== Turtle transmitter visual ===== */
+    .tx-visual {
+      margin: 18px 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    #turtleImg {
+      width: 120px;
+      height: auto;
+      border-radius: 14px;
+      box-shadow: 0 0 0 rgba(0,255,136,0);
+      transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+      background: #000; /* helps if image has transparency */
+    }
+
+    .tx-badge {
+      font-family: monospace;
+      font-weight: bold;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #00aa66;
+      color: #88ffcc;
+      background: #0b140b;
+    }
+
+    .tx-on #turtleImg {
+      animation: txPulse 0.9s infinite ease-in-out;
+      filter: brightness(1.15) saturate(1.2);
+      box-shadow: 0 0 18px rgba(0,255,136,0.25);
+    }
+
+    .tx-on .tx-badge {
+      color: #00ff88;
+      border-color: #00ff88;
+      background: #041a10;
+    }
+
+    @keyframes txPulse {
+      0%, 100% { transform: scale(1.00); }
+      50%      { transform: scale(1.06); }
+    }
+    /* ===== end turtle visual ===== */
+
     #output {
       background: #000;
       padding: 20px;
@@ -109,6 +154,12 @@
   <div class="row" style="margin: 18px 0;">
     <button id="txBtn">Transmit</button>
     <button id="clearBtn">Clear</button>
+  </div>
+
+  <!-- Turtle transmitter visual -->
+  <div class="tx-visual" id="txVisual">
+    <img id="turtleImg" src="turtle.png" alt="Turtle transmitting Morse code" />
+    <div id="txBadge" class="tx-badge" aria-live="polite">IDLE</div>
   </div>
 
   <div id="output"></div>
@@ -222,6 +273,20 @@ async function aesGcmDecrypt(hex, password) {
 }
 
 /** =========================
+ *  TURTLE TRANSMIT VISUAL
+ *  ========================= */
+function setTxVisual(on, label) {
+  const container = document.getElementById("txVisual");
+  const badge = document.getElementById("txBadge");
+  if (!container || !badge) return;
+
+  if (on) container.classList.add("tx-on");
+  else container.classList.remove("tx-on");
+
+  badge.textContent = label || (on ? "TRANSMITTING" : "IDLE");
+}
+
+/** =========================
  *  SAFE DOM HELPERS
  *  ========================= */
 const outputEl = document.getElementById('output');
@@ -301,6 +366,7 @@ function stopMorsePlayback() {
   st.playing = false;
   st.paused = true;
   resetPlaybackUI();
+  setTxVisual(false, "IDLE");
 }
 
 async function playMorse(morseStr) {
@@ -348,11 +414,14 @@ async function playMorse(morseStr) {
   st.playing = true;
   st.paused = false;
 
+  setTxVisual(true, "BEEPING");
+
   const totalMs = Math.max(0, (t - ctx.currentTime) * 1000);
   st.endTimer = setTimeout(() => {
     st.playing = false;
     st.paused = true;
     resetPlaybackUI();
+    setTxVisual(false, "READY");
   }, totalMs + 200);
 }
 
@@ -374,11 +443,13 @@ async function toggleMorsePlayback(morseStr) {
     st.paused = true;
     pp.textContent = "Resume Playback";
     pp.classList.remove("paused");
+    setTxVisual(true, "PAUSED");
   } else {
     await st.audioCtx.resume();
     st.paused = false;
     pp.textContent = "Pause Playback";
     pp.classList.add("paused");
+    setTxVisual(true, "BEEPING");
   }
 }
 
@@ -387,6 +458,7 @@ async function toggleMorsePlayback(morseStr) {
  *  ========================= */
 function clearAll() {
   stopMorsePlayback();
+  setTxVisual(false, "IDLE");
   setStatus("Ready...");
 }
 
@@ -397,6 +469,7 @@ async function runDadMode() {
   if (!msg) { setStatus("Enter message", "error"); return; }
   if (!pw || pw.length < 8) { setStatus("Longer password recommended (8+)", "error"); return; }
 
+  setTxVisual(true, "ENCRYPTING");
   setStatus("Encrypting (AES-256-GCM)...", "status");
 
   try {
@@ -447,7 +520,10 @@ async function runDadMode() {
     stopBtn.addEventListener("click", stopMorsePlayback);
     outputEl.appendChild(stopBtn);
 
+    setTxVisual(false, "READY");
+
   } catch (e) {
+    setTxVisual(false, "IDLE");
     setStatus("Error: " + (e?.message || String(e)), "error");
   }
 }
@@ -496,6 +572,7 @@ document.getElementById("showDecPw").addEventListener("change", (e) => {
 });
 
 setStatus("Ready...");
+setTxVisual(false, "IDLE");
 </script>
 
 </body>
