@@ -381,19 +381,40 @@ function setTxVisual(on, label) {
  *  TURTLE TX VIDEO (next to Transmit)
  *  ========================= */
 const turtleTxVid = document.getElementById("turtleTxVid");
+let turtleTxStopTimer = null;
 
-async function playTurtleDuringTx() {
+async function playTurtleDuringTx(minMs = 2500) {
   try {
     if (!turtleTxVid) return;
+
+    // Make it visibly animate (slightly slower playback + loop).
     turtleTxVid.loop = true;
     turtleTxVid.muted = true;
     turtleTxVid.playsInline = true;
+    turtleTxVid.playbackRate = 0.75;
+
+    // Cancel any previous scheduled stop
+    if (turtleTxStopTimer) {
+      clearTimeout(turtleTxStopTimer);
+      turtleTxStopTimer = null;
+    }
+
+    // Start from the beginning
     turtleTxVid.pause();
     turtleTxVid.currentTime = 0;
+
+    // Some browsers behave better if we call load() before play()
     turtleTxVid.load();
     await new Promise(r => requestAnimationFrame(r));
+
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
+
+    // Ensure it stays playing long enough to notice, even if encryption finishes instantly.
+    turtleTxStopTimer = setTimeout(() => {
+      stopTurtleTx();
+    }, minMs);
+
   } catch (e) {
     console.warn("Turtle TX video play failed:", e);
   }
@@ -401,8 +422,13 @@ async function playTurtleDuringTx() {
 
 function stopTurtleTx() {
   try {
+    if (turtleTxStopTimer) {
+      clearTimeout(turtleTxStopTimer);
+      turtleTxStopTimer = null;
+    }
     if (!turtleTxVid) return;
     turtleTxVid.loop = false;
+    turtleTxVid.playbackRate = 1.0;
     turtleTxVid.pause();
     turtleTxVid.currentTime = 0;
   } catch (_) {}
@@ -767,8 +793,6 @@ async function runDadMode() {
     outputEl.appendChild(btnRow);
 
     setTxVisual(false, "READY");
-    // stop the MP4 once encrypt is done (leave it "ready" still image)
-    stopTurtleTx();
 
   } catch (e) {
     setTxVisual(false, "IDLE");
