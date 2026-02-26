@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dad Mode – AES + Morse with Sound & Pause</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0a0a0a;
+      color: #00ff88;
+      padding: 30px;
+      max-width: 1000px;
+      margin: auto;
+      line-height: 1.6;
+    }
+    h1 { text-align: center; margin-bottom: 10px; }
+    .subtitle { text-align: center; color: #88ffcc; margin-bottom: 30px; }
+    .container { background: #111; padding: 25px; border-radius: 12px; border: 1px solid #00ff88; }
+    label { display: block; margin: 15px 0 5px; font-weight: bold; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      padding: 12px;
+      background: #1a1a1a;
+      color: #00ff88;
+      border: 1px solid #00aa66;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    .password-row { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+    .checkbox-row { display: flex; align-items: center; gap: 10px; margin: 15px 0; }
+    button {
+      padding: 12px 24px;
+      background: #00ff88;
+      color: black;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      margin: 10px 5px 10px 0;
+    }
+    button:hover { background: #33ffaa; }
+    button.paused { background: #ffaa00; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #output {
+      background: #000;
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid #004d33;
+      min-height: 220px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      margin-top: 20px;
+      overflow-y: auto;
+      max-height: 500px;
+    }
+    .cat-container { text-align: center; font-size: 120px; margin: 30px 0; transition: all 0.2s; }
+    .transmitting { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; transform: scale(1.08); } }
+    #morseOutput { margin: 15px 0; font-size: 18px; word-break: break-word; color: #ccffdd; }
+    .copy-btn { font-size: 14px; padding: 8px 16px; }
+    .status { color: #88ffcc; font-weight: bold; }
+    .error { color: #ff6666; font-weight: bold; }
+    .instructions { background: #1a2a1a; padding: 12px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #00ff88; }
+    .decrypt-section {
+      margin-top: 60px;
+      padding: 30px 20px;
+      background: #0d1a0d;
+      border-radius: 10px;
+      border: 1px solid #006633;
+    }
+    .row { display:flex; gap:10px; flex-wrap: wrap; }
+    .row > button { flex: 0 0 auto; }
+    .mini { font-size: 0.95em; color:#88ffcc; }
+    .hr { height: 1px; background:#0a3; opacity: 0.4; margin: 14px 0; }
+  </style>
+</head>
+<body>
+
+<h1>🐱 Dad Mode – Secure + Sound</h1>
+<p class="subtitle">Encrypt → Morse code → hear it beep & see cat blink (with pause/resume/stop)</p>
+
+<div class="container">
+  <div class="instructions">
+    <strong>How to use:</strong><br>
+    1. Enter message + strong password (top).<br>
+    2. Click Transmit → Morse generated, audio can play.<br>
+    3. Play/Pause/Stop sound as needed.<br>
+    4. Copy Morse.<br>
+    5. Scroll to bottom → paste Morse + re-enter same password → Decrypt.<br>
+    <br>
+    <em>Sound:</em> ~700 Hz tone, timing based on a single unit (dot=1, dash=3).<br>
+    <em>Security:</em> AES-256-GCM with random salt/IV + authentication (PBKDF2-SHA256).
+  </div>
+
+  <label for="message">Message:</label>
+  <textarea id="message" rows="3" placeholder="Your secret message...">MISS YOU DAD – ALWAYS PROUD</textarea>
+
+  <label for="password">Password (for encryption):</label>
+  <div class="password-row">
+    <input type="password" id="password" placeholder="Strong password (don’t reuse)" />
+    <label class="checkbox-row" style="margin:0;">
+      <input type="checkbox" id="showPw" />
+      Show
+    </label>
+  </div>
+
+  <div class="row" style="margin: 18px 0;">
+    <button id="txBtn">Transmit in Dad Mode</button>
+    <button id="clearBtn">Clear</button>
+  </div>
+
+  <div class="cat-container" id="cat">😺</div>
+  <div id="output"></div>
+
+  <div class="decrypt-section">
+    <h3>Decrypt a received message</h3>
+    <p class="mini">Enter the same password you used to encrypt the message.</p>
+
+    <label for="decryptPassword">Password for decryption:</label>
+    <div class="password-row">
+      <input type="password" id="decryptPassword" placeholder="Re-enter the same password here" />
+      <label class="checkbox-row" style="margin:0;">
+        <input type="checkbox" id="showDecPw" />
+        Show
+      </label>
+    </div>
+
+    <label for="morseInput">Paste received Morse code here:</label>
+    <textarea id="morseInput" rows="5" placeholder="Paste the full Morse string here..."></textarea>
+
+    <div style="margin-top: 20px;">
+      <button id="decBtn">Decrypt with Password</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/** =========================
+ *  MORSE <-> HEX
+ *  ========================= */
+const hexMorseDict = {
+  '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....',
+  '6':'-....','7':'--...','8':'---..','9':'----.','A':'.-','B':'-...',
+  'C':'-.-.','D':'-..','E':'.','F':'..-.'
+};
+const reverseHexMorse = Object.fromEntries(Object.entries(hexMorseDict).map(([k,v])=>[v,k]));
+
+// Hex string -> Morse tokens separated by spaces
+function toMorseHex(hex) {
+  return hex.toUpperCase().split('')
+    .map(c => hexMorseDict[c] || '')
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Morse tokens -> hex string (lowercase). Returns {hex, invalid:boolean}
+function morseToHex(morse) {
+  const groups = morse.trim().split(/\s+/).filter(Boolean);
+  let hex = '';
+  let invalid = false;
+  for (const g of groups) {
+    const ch = reverseHexMorse[g];
+    if (!ch) { invalid = true; hex += '?'; }
+    else hex += ch;
+  }
+  return { hex: hex.toLowerCase(), invalid };
+}
+
+/** =========================
+ *  AES-GCM (PBKDF2)
+ *  ========================= */
+async function aesGcmEncrypt(plaintext, password) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits","deriveKey"]
+  );
+
+  const key = await crypto.subtle.deriveKey(
+    {name:"PBKDF2", salt, iterations:150000, hash:"SHA-256"},
+    keyMaterial,
+    {name:"AES-GCM", length:256},
+    false, ["encrypt"]
+  );
+
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, enc.encode(plaintext));
+
+  const combined = new Uint8Array(salt.length + iv.length + ct.byteLength);
+  combined.set(salt,0);
+  combined.set(iv, salt.length);
+  combined.set(new Uint8Array(ct), salt.length + iv.length);
+
+  const hex = Array.from(combined).map(b=>b.toString(16).padStart(2,'0')).join('');
+  return { hex };
+}
+
+async function aesGcmDecrypt(hex, password) {
+  if (!/^[0-9a-f]+$/i.test(hex) || hex.length < (16+12+1)*2) {
+    throw new Error("Invalid hex payload length/content");
+  }
+
+  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+  const salt = bytes.slice(0,16);
+  const iv   = bytes.slice(16,28);
+  const data = bytes.slice(28);
+
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits","deriveKey"]
+  );
+
+  const key = await crypto.subtle.deriveKey(
+    {name:"PBKDF2", salt, iterations:150000, hash:"SHA-256"},
+    keyMaterial,
+    {name:"AES-GCM", length:256},
+    false, ["decrypt"]
+  );
+
+  const decrypted = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
+  return new TextDecoder().decode(decrypted);
+}
+
+/** =========================
+ *  SAFE DOM HELPERS
+ *  ========================= */
+const outputEl = document.getElementById('output');
+const catEl = document.getElementById('cat');
+
+function setStatus(text, cls = "status") {
+  outputEl.innerHTML = "";
+  const s = document.createElement("strong");
+  s.className = cls;
+  s.textContent = text;
+  outputEl.appendChild(s);
+}
+
+function appendLine(label, value) {
+  const div = document.createElement("div");
+  const b = document.createElement("strong");
+  b.textContent = label + " ";
+  div.appendChild(b);
+  div.appendChild(document.createTextNode(value));
+  outputEl.appendChild(div);
+}
+
+/** =========================
+ *  AUDIO ENGINE (single session ctx)
+ *  ========================= */
+const MorseTiming = {
+  unitMs: 60,     // base unit
+  freqHz: 700,
+  gain: 0.4,
+};
+
+window.morseAudio = {
+  audioCtx: null,
+  gainNode: null,
+  playing: false,
+  paused: true,
+  endTimer: null,
+};
+
+async function ensureAudio() {
+  const st = window.morseAudio;
+  if (!st.audioCtx || st.audioCtx.state === "closed") {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = MorseTiming.gain;
+    gainNode.connect(ctx.destination);
+    st.audioCtx = ctx;
+    st.gainNode = gainNode;
+    st.playing = false;
+    st.paused = true;
+  }
+  if (st.audioCtx.state === "suspended") {
+    await st.audioCtx.resume();
+  }
+}
+
+function resetPlaybackUI() {
+  const pp = document.getElementById("playPauseBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  if (pp) {
+    pp.textContent = "Play Morse Sound";
+    pp.classList.remove("paused");
+  }
+  if (stopBtn) stopBtn.disabled = true;
+}
+
+function stopMorsePlayback() {
+  const st = window.morseAudio;
+  if (st.endTimer) {
+    clearTimeout(st.endTimer);
+    st.endTimer = null;
+  }
+  if (st.audioCtx && st.audioCtx.state !== "closed") {
+    st.audioCtx.close();
+  }
+  st.audioCtx = null;
+  st.gainNode = null;
+  st.playing = false;
+  st.paused = true;
+  resetPlaybackUI();
+}
+
+async function playMorse(morseStr) {
+  if (!morseStr) throw new Error("No Morse to play");
+
+  // stop any previous run (also clears UI)
+  stopMorsePlayback();
+
+  await ensureAudio();
+  const st = window.morseAudio;
+  const ctx = st.audioCtx;
+  const gainNode = st.gainNode;
+
+  const unit = MorseTiming.unitMs;
+  const dotMs = unit;
+  const dashMs = unit * 3;
+  const elemGapMs = unit;       // intra-symbol gap
+  const letterGapMs = unit * 3; // between tokens (we use spaces between hex chars)
+  const wordGapMs = unit * 7;
+
+  const playBeep = (startTimeSec, durationSec) => {
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(MorseTiming.freqHz, startTimeSec);
+    osc.connect(gainNode);
+    osc.start(startTimeSec);
+    osc.stop(startTimeSec + durationSec);
+  };
+
+  let t = ctx.currentTime + 0.08;
+
+  // Our morse output uses '.' '-' and ' ' between letters (hex digits). No '/' by default.
+  for (const sym of morseStr) {
+    if (sym === ".") {
+      playBeep(t, dotMs / 1000);
+      t += (dotMs + elemGapMs) / 1000;
+    } else if (sym === "-") {
+      playBeep(t, dashMs / 1000);
+      t += (dashMs + elemGapMs) / 1000;
+    } else if (sym === " ") {
+      t += (letterGapMs) / 1000;
+    } else if (sym === "/") {
+      t += (wordGapMs) / 1000;
+    } else {
+      // ignore unknown characters
+    }
+  }
+
+  st.playing = true;
+  st.paused = false;
+
+  const totalMs = Math.max(0, (t - ctx.currentTime) * 1000);
+  st.endTimer = setTimeout(() => {
+    st.playing = false;
+    st.paused = true;
+    resetPlaybackUI();
+  }, totalMs + 200);
+}
+
+async function toggleMorsePlayback(morseStr) {
+  const pp = document.getElementById("playPauseBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const st = window.morseAudio;
+
+  if (!st.playing) {
+    await playMorse(morseStr);
+    pp.textContent = "Pause Playback";
+    pp.classList.add("paused");
+    stopBtn.disabled = false;
+    return;
+  }
+
+  // toggle pause/resume on same context
+  if (!st.paused) {
+    await st.audioCtx.suspend();
+    st.paused = true;
+    pp.textContent = "Resume Playback";
+    pp.classList.remove("paused");
+  } else {
+    await st.audioCtx.resume();
+    st.paused = false;
+    pp.textContent = "Pause Playback";
+    pp.classList.add("paused");
+  }
+}
+
+/** =========================
+ *  CAT BLINK (synced)
+ *  ========================= */
+function runCatBlink(morseStr) {
+  const unit = MorseTiming.unitMs;
+  const dotMs = unit;
+  const dashMs = unit * 3;
+  const elemGapMs = unit;
+  const letterGapMs = unit * 3;
+  const wordGapMs = unit * 7;
+
+  let delay = 0;
+
+  // start look
+  catEl.textContent = "😺 (transmitting)";
+  catEl.classList.add("transmitting");
+
+  for (const s of morseStr) {
+    if (s === ".") {
+      setTimeout(() => { catEl.textContent = "😿"; }, delay);
+      setTimeout(() => { catEl.textContent = "😺"; }, delay + dotMs);
+      delay += dotMs + elemGapMs;
+    } else if (s === "-") {
+      setTimeout(() => { catEl.textContent = "😿"; }, delay);
+      setTimeout(() => { catEl.textContent = "😺"; }, delay + dashMs);
+      delay += dashMs + elemGapMs;
+    } else if (s === " ") {
+      delay += letterGapMs;
+    } else if (s === "/") {
+      delay += wordGapMs;
+    }
+  }
+
+  setTimeout(() => {
+    catEl.textContent = "😺 (done)";
+    catEl.classList.remove("transmitting");
+  }, delay + 50);
+}
+
+/** =========================
+ *  UI: TRANSMIT / CLEAR / DECRYPT
+ *  ========================= */
+function clearAll() {
+  stopMorsePlayback();
+  catEl.textContent = "😺";
+  catEl.classList.remove("transmitting");
+  setStatus("Ready...");
+}
+
+async function runDadMode() {
+  const msg = document.getElementById('message').value.trim();
+  const pw  = document.getElementById('password').value;
+
+  if (!msg) { setStatus("Enter message", "error"); return; }
+  if (!pw || pw.length < 8) { setStatus("Longer password recommended (8+)", "error"); return; }
+
+  setStatus("Encrypting (AES-256-GCM)...", "status");
+  catEl.textContent = "😺 (encrypting)";
+  catEl.classList.add("transmitting");
+
+  try {
+    const { hex } = await aesGcmEncrypt(msg, pw);
+    const morse = toMorseHex(hex);
+
+    // Build output safely
+    outputEl.innerHTML = "";
+
+    appendLine("Encrypted hex (shortened):", `${hex.slice(0,80)}... (${hex.length} chars)`);
+
+    const hr = document.createElement("div");
+    hr.className = "hr";
+    outputEl.appendChild(hr);
+
+    const morseDiv = document.createElement("div");
+    morseDiv.id = "morseOutput";
+
+    const morseTitle = document.createElement("strong");
+    morseTitle.textContent = "Morse to transmit:";
+    morseDiv.appendChild(morseTitle);
+    morseDiv.appendChild(document.createElement("br"));
+
+    const morseText = document.createElement("div");
+    morseText.textContent = morse; // safe
+    morseDiv.appendChild(morseText);
+    outputEl.appendChild(morseDiv);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "Copy Morse";
+    copyBtn.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(morse);
+      alert("Copied!");
+    });
+    outputEl.appendChild(copyBtn);
+
+    const playPauseBtn = document.createElement("button");
+    playPauseBtn.id = "playPauseBtn";
+    playPauseBtn.textContent = "Play Morse Sound";
+    playPauseBtn.addEventListener("click", () => {
+      toggleMorsePlayback(morse).catch(err => alert("Audio error: " + err.message));
+    });
+    outputEl.appendChild(playPauseBtn);
+
+    const stopBtn = document.createElement("button");
+    stopBtn.id = "stopBtn";
+    stopBtn.textContent = "Stop";
+    stopBtn.disabled = true;
+    stopBtn.addEventListener("click", stopMorsePlayback);
+    outputEl.appendChild(stopBtn);
+
+    outputEl.appendChild(document.createElement("br"));
+    outputEl.appendChild(document.createElement("br"));
+
+    const sim = document.createElement("strong");
+    sim.className = "status";
+    sim.textContent = "Visual transmission simulation...";
+    outputEl.appendChild(sim);
+
+    // Cat blink synced
+    runCatBlink(morse);
+
+  } catch (e) {
+    setStatus("Error: " + (e?.message || String(e)), "error");
+    catEl.textContent = "😿";
+    catEl.classList.remove("transmitting");
+  }
+}
+
+async function decryptDadMode() {
+  const morse = document.getElementById('morseInput').value.trim();
+  const pw = document.getElementById('decryptPassword').value;
+
+  if (!morse) { alert("Paste Morse first"); return; }
+  if (!pw) { alert("Enter decryption password"); return; }
+
+  try {
+    const { hex, invalid } = morseToHex(morse);
+    if (invalid || hex.includes('?')) throw new Error("Invalid Morse – check copy/paste or typos");
+
+    const plaintext = await aesGcmDecrypt(hex, pw);
+
+    // show success (safe DOM, no innerHTML injection with plaintext)
+    alert(`Success!\n\nOriginal message:\n${plaintext}`);
+
+    const br = document.createElement("br");
+    outputEl.appendChild(br);
+
+    const safe = document.createElement("div");
+    safe.className = "status";
+    safe.style.color = "#88ffcc";
+    safe.textContent = `Decrypted: ${plaintext}`;
+    outputEl.appendChild(safe);
+
+  } catch (err) {
+    alert(`Failed: ${err.message}\n\nLikely causes:\n- Wrong password\n- Incomplete/invalid Morse\n- Typos in Morse`);
+  }
+}
+
+/** =========================
+ *  Wire up controls
+ *  ========================= */
+document.getElementById("txBtn").addEventListener("click", () => runDadMode());
+document.getElementById("clearBtn").addEventListener("click", () => clearAll());
+document.getElementById("decBtn").addEventListener("click", () => decryptDadMode());
+
+document.getElementById("showPw").addEventListener("change", (e) => {
+  document.getElementById("password").type = e.target.checked ? "text" : "password";
+});
+document.getElementById("showDecPw").addEventListener("change", (e) => {
+  document.getElementById("decryptPassword").type = e.target.checked ? "text" : "password";
+});
+
+// initial status
+setStatus("Ready...");
+</script>
+
+</body>
+</html>
