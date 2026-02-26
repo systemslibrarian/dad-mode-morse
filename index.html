@@ -194,6 +194,119 @@
       font-family: monospace;
       font-size: 14px;
     }
+
+    /* ===== Help tooltip ===== */
+    .help-tip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 1px solid #00aa66;
+      color: #00aa66;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: default;
+      position: relative;
+      margin-left: 5px;
+      vertical-align: middle;
+      user-select: none;
+      font-family: Arial, sans-serif;
+      line-height: 1;
+    }
+    .help-tip:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 22px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #1a2a1a;
+      border: 1px solid #00aa66;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: #88ffcc;
+      white-space: normal;
+      width: 270px;
+      z-index: 999;
+      pointer-events: none;
+      font-family: monospace;
+      line-height: 1.5;
+    }
+    @media (max-width: 640px) {
+      .help-tip:hover::after { left: auto; right: 0; top: 22px; transform: none; }
+    }
+
+    /* ===== Signal strength slider ===== */
+    .signal-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 8px 0 4px;
+      font-size: 14px;
+      color: #88ffcc;
+      padding: 0 2px;
+    }
+    .signal-row label { margin: 0; font-weight: bold; font-size: 14px; color: #88ffcc; }
+    #signalSlider {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: linear-gradient(to right, #ff4444, #ffaa00, #00ff88);
+      outline: none;
+      cursor: pointer;
+      width: 130px;
+      flex: 0 0 auto;
+    }
+    #signalSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #00ff88;
+      border: 2px solid #004422;
+      cursor: pointer;
+    }
+    #signalSlider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #00ff88;
+      border: 2px solid #004422;
+      cursor: pointer;
+    }
+    #signalValueLabel {
+      font-family: monospace;
+      font-size: 13px;
+      color: #ccffdd;
+      min-width: 210px;
+    }
+
+    /* ===== Toast notification ===== */
+    #toastMsg {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      background: #1a2a1a;
+      border: 1px solid #00aa66;
+      color: #88ffcc;
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 14px;
+      z-index: 9999;
+      box-shadow: 0 4px 18px rgba(0,255,136,0.15);
+      max-width: 320px;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.3s, transform 0.3s;
+      pointer-events: none;
+    }
+    #toastMsg.show { opacity: 1; transform: translateY(0); }
   </style>
 </head>
 <body>
@@ -245,6 +358,13 @@
       <source src="./turtle.mp4" type="video/mp4" />
       Your browser does not support the video tag.
     </video>
+  </div>
+
+  <!-- Signal strength slider -->
+  <div class="signal-row">
+    <label for="signalSlider">&#x1F4E1; Signal:</label>
+    <input type="range" id="signalSlider" min="0" max="100" value="100" />
+    <span id="signalValueLabel">100% &mdash; Crystal clear</span>
   </div>
 
   <div id="output"></div>
@@ -551,6 +671,10 @@ async function playMorse(morseStr) {
   const ctx = st.audioCtx;
   const gainNode = st.gainNode;
 
+  const sigLevel = signalQuality();
+  const degraded = degradeMorse(morseStr, sigLevel);
+  const jitterFactor = (100 - sigLevel) / 100;
+
   const unit = MorseTiming.unitMs;
   const dotMs = unit;
   const dashMs = unit * 3;
@@ -569,7 +693,8 @@ async function playMorse(morseStr) {
 
   let t = ctx.currentTime + 0.08;
 
-  for (const sym of morseStr) {
+  for (const sym of degraded) {
+    if (jitterFactor > 0) t += Math.random() * jitterFactor * unit * 0.25 / 1000;
     if (sym === ".") {
       playBeep(t, dotMs / 1000);
       t += (dotMs + elemGapMs) / 1000;
@@ -690,6 +815,10 @@ function synthMorseWavBlob(morseStr, opts = {}) {
   const freq = opts.freqHz || MorseTiming.freqHz;
   const unit = opts.unitMs || MorseTiming.unitMs;
   const volume = (typeof opts.volume === "number") ? opts.volume : 0.35;
+  const noise = typeof opts.noise === "number" ? opts.noise : 0; // 0–1 static noise level
+  const sigLevel = typeof opts.signalLevel === "number" ? opts.signalLevel : 100;
+
+  morseStr = degradeMorse(morseStr, sigLevel); // apply symbol errors
 
   const timeline = buildMorseTimelineMs(morseStr, unit);
   const totalMs = timeline.reduce((a, x) => a + x.ms, 0);
@@ -714,6 +843,7 @@ function synthMorseWavBlob(morseStr, opts = {}) {
         phase += phaseInc;
         if (phase > 2*Math.PI) phase -= 2*Math.PI;
       }
+      if (noise > 0) v = Math.max(-1, Math.min(1, v + (Math.random() * 2 - 1) * noise * (tone ? 0.06 : 0.14)));
       samples[idx++] = v;
     }
   };
@@ -750,7 +880,23 @@ async function runDadMode() {
     const morse = toMorseHex(hex);
 
     outputEl.innerHTML = "";
-    appendLine("Encrypted hex (shortened):", `${hex.slice(0,80)}... (${hex.length} chars)`);
+    (() => {
+      const d = document.createElement("div");
+      const b = document.createElement("strong");
+      b.textContent = "Encrypted hex (shortened): ";
+      const tip = document.createElement("span");
+      tip.className = "help-tip";
+      tip.textContent = "?";
+      tip.setAttribute("data-tip",
+        "First 32 hex chars = random salt (16 bytes). " +
+        "Next 24 hex chars = random IV/nonce (12 bytes). " +
+        "These are NOT secret \u2014 bundled so the same password+message never produces the same ciphertext twice. " +
+        "The rest is AES-GCM ciphertext + authentication tag.");
+      b.appendChild(tip);
+      d.appendChild(b);
+      d.appendChild(document.createTextNode(`${hex.slice(0,80)}\u2026 (${hex.length} chars)`));
+      outputEl.appendChild(d);
+    })();
 
     const hr = document.createElement("div");
     hr.className = "hr";
@@ -797,7 +943,8 @@ async function runDadMode() {
     wavBtn.textContent = "Download Morse WAV";
     wavBtn.addEventListener("click", () => {
       try {
-        const blob = synthMorseWavBlob(morse, { unitMs: MorseTiming.unitMs, freqHz: MorseTiming.freqHz });
+        const sig = signalQuality();
+        const blob = synthMorseWavBlob(morse, { unitMs: MorseTiming.unitMs, freqHz: MorseTiming.freqHz, noise: (100 - sig) / 100, signalLevel: sig });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -879,6 +1026,7 @@ audioUpload.addEventListener("change", () => {
   uploadedAudio.style.display = "block";
   playUploadedBtn.disabled = false;
   stopUploadedBtn.disabled = false;
+  showToast("Playback only \u2014 WAV files can\u2019t be decoded back to Morse here.");
 });
 
 playUploadedBtn.addEventListener("click", () => {
@@ -889,6 +1037,63 @@ stopUploadedBtn.addEventListener("click", () => {
   uploadedAudio.pause();
   uploadedAudio.currentTime = 0;
 });
+
+/** =========================
+ *  Toast notification
+ *  ========================= */
+let _toastTimer = null;
+function showToast(msg, duration = 3800) {
+  const el = document.getElementById("toastMsg");
+  if (!el) return;
+  if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+  el.textContent = msg;
+  el.classList.add("show");
+  _toastTimer = setTimeout(() => {
+    el.classList.remove("show");
+    _toastTimer = null;
+  }, duration);
+}
+
+/** =========================
+ *  Signal quality helpers
+ *  ========================= */
+function signalQuality() {
+  const sl = document.getElementById("signalSlider");
+  return sl ? parseInt(sl.value, 10) : 100;
+}
+
+function signalLabelText(v) {
+  if (v >= 100) return "100% \u2014 Crystal clear";
+  if (v >= 80)  return v + "% \u2014 Mostly stable";
+  if (v >= 50)  return v + "% \u2014 Getting noisy\u2026";
+  if (v >= 25)  return v + "% \u2014 Weak signal!";
+  if (v > 0)    return v + "% \u2014 Total garbage \uD83D\uDC80";
+  return "0% \u2014 Dead air \uD83D\uDC80";
+}
+
+/** =========================
+ *  Morse degradation (signal simulation)
+ *  ========================= */
+function degradeMorse(morseStr, signalLevel) {
+  if (signalLevel >= 100) return morseStr;
+  const errRate = (100 - signalLevel) / 100; // 0 = clean, 1 = chaos
+  let out = '';
+  for (const c of morseStr) {
+    if (c === '.' || c === '-') {
+      const r = Math.random();
+      if (r < errRate * 0.25) continue;                      // drop element
+      if (r < errRate * 0.42) { out += c === '.' ? '-' : '.'; continue; } // flip
+      if (r < errRate * 0.52) { out += c + (Math.random() < 0.5 ? '.' : '-'); continue; } // phantom extra
+      out += c;
+    } else if (c === ' ') {
+      out += c;
+      if (Math.random() < errRate * 0.35) out += ' '; // extra gap
+    } else {
+      out += c; // '/' word-gap or other
+    }
+  }
+  return out || morseStr; // fallback to original if degraded to nothing
+}
 
 /** =========================
  *  Wire up controls
@@ -904,12 +1109,22 @@ document.getElementById("showDecPw").addEventListener("change", (e) => {
   document.getElementById("decryptPassword").type = e.target.checked ? "text" : "password";
 });
 
+const signalSliderEl = document.getElementById("signalSlider");
+const signalValueLabelEl = document.getElementById("signalValueLabel");
+if (signalSliderEl) {
+  signalSliderEl.addEventListener("input", () => {
+    signalValueLabelEl.textContent = signalLabelText(parseInt(signalSliderEl.value, 10));
+  });
+}
+
 // Helpful console hint if video fails to load
 turtleTxVid?.addEventListener("error", () => console.warn("turtle.mp4 failed to load (check filename/path)."));
 
 setStatus("Ready...");
 setTxVisual(false, "IDLE");
 </script>
+
+<div id="toastMsg"></div>
 
 </body>
 </html>
