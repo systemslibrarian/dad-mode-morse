@@ -286,6 +286,38 @@
       min-width: 210px;
     }
 
+    /* ===== Decode progress bar ===== */
+    #decodeProgress {
+      display: none;
+      margin: 12px 0 4px;
+      background: #0c180c;
+      border: 1px solid rgba(0,255,136,0.22);
+      border-radius: 8px;
+      padding: 10px 14px 12px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    #decodeProgressLabel {
+      color: #88ffcc;
+      display: block;
+      margin-bottom: 6px;
+    }
+    #decodeProgressTrack {
+      background: #0a2a0a;
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(0,255,136,0.15);
+    }
+    #decodeProgressBar {
+      height: 100%;
+      border-radius: 4px;
+      background: linear-gradient(to right, #00aa66, #00ff88);
+      width: 0%;
+      transition: width 0.25s ease;
+    }
+    /* ===== end decode progress ===== */
+
     /* ===== Toast notification ===== */
     #toastMsg {
       position: fixed;
@@ -382,6 +414,11 @@
       <button id="decodeWavBtn" disabled>Decode WAV → Morse</button>
     </div>
     <audio id="uploadedAudio" controls style="width:100%; margin-top:10px; display:none;"></audio>
+
+    <div id="decodeProgress">
+      <span id="decodeProgressLabel">Idle</span>
+      <div id="decodeProgressTrack"><div id="decodeProgressBar"></div></div>
+    </div>
 
     <h3>Decrypt a received message</h3>
     <p class="mini">Enter the same password used to encrypt the message.</p>
@@ -535,38 +572,33 @@ function waitForCanPlay(video, timeoutMs = 5000) {
   });
 }
 
-async function playTurtleDuringTx(minMs = 3000) {
+async function playTurtleDuringTx() {
+  if (!turtleTxVid) return;
+
+  turtleTxVid.loop = false;
+  turtleTxVid.muted = true;
+  turtleTxVid.playsInline = true;
+  turtleTxVid.playbackRate = 0.85;
+  turtleTxVid.removeEventListener("ended", stopTurtleTx);
+  turtleTxVid.addEventListener("ended", stopTurtleTx, { once: true });
+  turtleTxVid.currentTime = 0;
+
+  // Attempt 1: play directly (works when video is already buffered)
   try {
-    if (!turtleTxVid) return;
-
-    turtleTxVid.loop = false;
-    turtleTxVid.muted = true;
-    turtleTxVid.playsInline = true;
-    turtleTxVid.playbackRate = 0.85;
-
-    if (turtleTxStopTimer) {
-      clearTimeout(turtleTxStopTimer);
-      turtleTxStopTimer = null;
-    }
-
-    // remove any previous ended listener to avoid duplicates
-    turtleTxVid.removeEventListener("ended", stopTurtleTx);
-
-    // start from the beginning
-    turtleTxVid.currentTime = 0;
-
-    // wait until browser says it can play
-    await waitForCanPlay(turtleTxVid, 7000);
-
-    // stop when the video finishes playing
-    turtleTxVid.addEventListener("ended", stopTurtleTx, { once: true });
-
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
+    return; // success
+  } catch (_) { /* not ready yet, fall through */ }
 
+  // Attempt 2: force a load then wait for canplay before retrying
+  try {
+    turtleTxVid.load();
+    await waitForCanPlay(turtleTxVid, 6000);
+    const p = turtleTxVid.play();
+    if (p && typeof p.then === "function") await p;
   } catch (e) {
-    console.warn("Turtle TX video play failed:", e);
-    setTxVisual(false, "NO VIDEO");
+    // Video file missing or blocked — fail silently (don't show NO VIDEO)
+    console.warn("Turtle TX video unavailable:", e.message);
   }
 }
 
@@ -582,6 +614,8 @@ function stopTurtleTx() {
     turtleTxVid.pause();
     turtleTxVid.currentTime = 0;
   } catch (_) {}
+  // Once the video finishes, update the badge to READY
+  setTxVisual(false, "READY");
 }
 
 /** =========================
@@ -969,7 +1003,14 @@ async function runDadMode() {
     btnRow.appendChild(wavBtn);
     outputEl.appendChild(btnRow);
 
-    setTxVisual(false, "READY");
+    // Keep the tx-on glow until the video finishes (stopTurtleTx will clear it).
+    // If the video never started, clear the badge now.
+    if (!turtleTxVid || turtleTxVid.paused) {
+      setTxVisual(false, "READY");
+    } else {
+      const badge = document.getElementById("txBadge");
+      if (badge) badge.textContent = "READY";
+    }
 
   } catch (e) {
     setTxVisual(false, "IDLE");
@@ -1019,6 +1060,10 @@ const decodeWavBtn = document.getElementById("decodeWavBtn");
 
 audioUpload.addEventListener("change", () => {
   const file = audioUpload.files && audioUpload.files[0];
+  // Reset progress bar whenever a new file is chosen
+  const progressWrap = document.getElementById("decodeProgress");
+  if (progressWrap) progressWrap.style.display = "none";
+
   if (!file) {
     audioUploadName.textContent = "No audio loaded";
     uploadedAudio.style.display = "none";
@@ -1051,6 +1096,21 @@ decodeWavBtn.addEventListener("click", () => {
   if (file) decodeMorseWav(file);
 });
 
+/** Update the decode progress bar. */
+function setDecodeProgress(label, pct, isError = false) {
+  const wrap = document.getElementById("decodeProgress");
+  const lbl  = document.getElementById("decodeProgressLabel");
+  const bar  = document.getElementById("decodeProgressBar");
+  if (!wrap) return;
+  wrap.style.display = "block";
+  lbl.textContent    = label;
+  lbl.style.color    = isError ? "#ff6666" : "#88ffcc";
+  bar.style.width    = pct + "%";
+  bar.style.background = isError
+    ? "linear-gradient(to right, #aa2200, #ff4444)"
+    : "linear-gradient(to right, #00aa66, #00ff88)";
+}
+
 /**
  * Decode a Morse WAV file into a Morse string and populate the decrypt input.
  * Works by computing RMS energy in short frames, thresholding to get
@@ -1059,10 +1119,12 @@ decodeWavBtn.addEventListener("click", () => {
 async function decodeMorseWav(file) {
   decodeWavBtn.disabled = true;
   decodeWavBtn.textContent = "Decoding\u2026";
-  showToast("Analysing audio\u2026");
 
   try {
+    setDecodeProgress("\uD83D\uDCE5 Step 1 / 6 \u2014 Reading audio file\u2026", 8);
     const arrayBuffer = await file.arrayBuffer();
+
+    setDecodeProgress("\uD83C\uDFBC Step 2 / 6 \u2014 Decoding audio data\u2026", 22);
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     let audioBuffer;
     try {
@@ -1072,6 +1134,7 @@ async function decodeMorseWav(file) {
     }
 
     // Mix down to mono
+    setDecodeProgress("\uD83D\uDD0A Step 3 / 6 \u2014 Mixing to mono & measuring energy\u2026", 38);
     const sampleRate = audioBuffer.sampleRate;
     const numChannels = audioBuffer.numberOfChannels;
     const length = audioBuffer.length;
@@ -1097,6 +1160,7 @@ async function decodeMorseWav(file) {
     }
 
     // Threshold at 15% of the 95th-percentile energy value
+    setDecodeProgress("📊 Step 4 / 6 — Detecting tone on/off…", 55);
     const sorted = Array.from(energy).sort((a, b) => a - b);
     const p95 = sorted[Math.floor(sorted.length * 0.95)];
     const threshold = p95 * 0.15;
@@ -1123,6 +1187,7 @@ async function decodeMorseWav(file) {
     // Strategy: find the largest relative jump in sorted ON durations — that gap
     // marks the dot/dash boundary. Take the mean of the lower (dot) cluster.
     // Falls back gracefully when all symbols are the same type.
+    setDecodeProgress("🔬 Step 5 / 6 — Estimating dot/dash lengths…", 72);
     const onDurs = runs.filter(r => r.val === 1).map(r => r.ms).sort((a, b) => a - b);
     let rawUnit = MorseTiming.unitMs;
     if (onDurs.length) {
@@ -1145,6 +1210,7 @@ async function decodeMorseWav(file) {
     const unitMs = Math.max(20, rawUnit);
 
     // Classify runs
+    setDecodeProgress("📝 Step 6 / 6 — Classifying dots & dashes…", 88);
     let morse = "";
     for (const r of runs) {
       if (r.val === 1) {
@@ -1161,10 +1227,10 @@ async function decodeMorseWav(file) {
 
     document.getElementById("morseInput").value = morse;
     document.getElementById("morseInput").scrollIntoView({ behavior: "smooth" });
-    showToast("Decoded! Morse pasted below \u2014 enter password and click Decrypt.", 5000);
+    setDecodeProgress("\u2705 Done! Morse code extracted \u2014 enter your password and click Decrypt.", 100);
 
   } catch (e) {
-    showToast("Decode failed: " + (e?.message || String(e)), 5000);
+    setDecodeProgress("\u274C Failed: " + (e?.message || String(e)), 100, true);
   } finally {
     decodeWavBtn.disabled = false;
     decodeWavBtn.textContent = "Decode WAV \u2192 Morse";
