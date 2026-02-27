@@ -634,16 +634,6 @@ function stopTurtleTx(force = false) {
   } catch (_) {}
   setTxVisual(false, "READY");
 }
-    if (!turtleTxVid) return;
-    turtleTxVid.loop = false;
-    turtleTxVid.playbackRate = 1.0;
-    turtleTxVid.pause();
-    turtleTxVid.currentTime = 0;
-  } catch (_) {}
-  // Once the video finishes, update the badge to READY
-  setTxVisual(false, "READY");
-}
-
 /** =========================
  *  SAFE DOM HELPERS
  *  ========================= */
