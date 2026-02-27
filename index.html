@@ -808,22 +808,37 @@ function stopTurtleTx(force = false) {
     }
     if (!turtleTxVid) return;
 
-    const elapsed = performance.now() - (turtleTxStartedAt || 0);
-    const remaining = Math.max(0, TURTLE_TX_MIN_MS - elapsed);
-
-    // If we haven't shown the animation long enough, delay the stop a bit
-    // (unless force=true, e.g. Clear button).
-    if (!force && remaining > 0) {
-      turtleTxStopTimer = setTimeout(() => stopTurtleTx(true), remaining);
+    if (force) {
+      // Immediate stop (e.g. Clear button)
+      turtleTxVid.loop = false;
+      turtleTxVid.playbackRate = 1.0;
+      turtleTxVid.pause();
+      try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxVisual(false, "READY");
       return;
     }
 
-    turtleTxVid.loop = false;
-    turtleTxVid.playbackRate = 1.0;
-    turtleTxVid.pause();
-    try { turtleTxVid.currentTime = 0; } catch (_) {}
-  } catch (_) {}
-  setTxVisual(false, "READY");
+    // Let the video finish its current playthrough to the end
+    turtleTxVid.loop = false;           // stop looping so it will fire 'ended'
+    turtleTxVid.playbackRate = 1.0;     // restore normal speed for the finish
+
+    const onEnded = () => {
+      turtleTxVid.removeEventListener("ended", onEnded);
+      try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxVisual(false, "READY");
+    };
+    turtleTxVid.addEventListener("ended", onEnded, { once: true });
+
+    // Safety: if already past the end or paused, clean up after a timeout
+    turtleTxStopTimer = setTimeout(() => {
+      turtleTxVid.removeEventListener("ended", onEnded);
+      turtleTxVid.pause();
+      try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxVisual(false, "READY");
+    }, 30000); // 30s safety net
+  } catch (_) {
+    setTxVisual(false, "READY");
+  }
 }
 /** =========================
  *  SAFE DOM HELPERS
