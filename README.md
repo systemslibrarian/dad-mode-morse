@@ -190,18 +190,31 @@ node test_crypto.mjs
 
 | # | What is tested |
 |---|---|
-| 1 | Encrypt + decrypt round-trip (correct password recovers plaintext) |
-| 2 | Wrong password is always rejected by the AES-GCM authentication tag |
-| 3 | Random salt + IV — same message/password produces a different ciphertext every time |
+| 1 | DMM1 v2 encrypt + decrypt round-trip (correct password recovers plaintext) |
+| 2 | Wrong password is rejected (AES-GCM auth tag + AAD) |
+| 3 | Random salt + IV — same message/password produces different ciphertext every time |
 | 4 | Hex ↔ Morse conversion is perfectly lossless (all 16 hex digits covered) |
 | 5 | Full pipeline: encrypt → hex → Morse → hex → decrypt |
 | 6 | Unicode / emoji / CJK characters survive the full round-trip correctly |
 | 7 | Empty string is handled without errors |
 | 8 | Long message (1000 chars) round-trips correctly |
-| 9 | Tampered ciphertext is rejected by the GCM integrity check |
-| 10 | Payload binary layout — salt/IV/ciphertext byte offsets are correct |
+| 9 | Tampered ciphertext is rejected (GCM + AAD integrity check) |
+| 10 | DMM1 v2 payload binary layout — 40-byte header + ciphertext + tag |
 | 11 | Morse output contains only valid hex Morse symbols |
 | 12 | All 16 hex characters map to unique, non-overlapping Morse codes |
+| 13 | Signal Key (pepper) encrypt + decrypt round-trip |
+| 14 | Pepper used → decrypt without pepper throws |
+| 15 | Wrong pepper → decrypt fails |
+| 16 | No pepper → FLAG_PEPPER bit is 0 |
+| 17 | With pepper → FLAG_PEPPER bit is 1 |
+| 18 | Tampered header (AAD) is rejected |
+| 19 | Legacy v1 payload decrypts correctly (backward compat) |
+| 20 | PBKDF2 iterations stored in header match encrypt params |
+| 21 | `concatPwPepper` combines password + pepper with NUL separator |
+| 22 | HKDF key separation: different info → different keys |
+| 23 | `isDmm1` rejects invalid inputs |
+| 24 | `bytesFromHex` rejects invalid hex |
+| 25 | Full pipeline with pepper: encrypt → Morse → decrypt |
 
 ### WAV decode tests — `test_decode.py`
 
@@ -225,6 +238,12 @@ python3 test_decode.py
 | 8 | Cipher-like mixed long string |
 | 9 | WAV with added leading/trailing silence is decoded correctly |
 | 10 | Stereo WAV (two-channel) decodes to same result as mono |
+| 11 | All 16 hex Morse characters round-trip |
+| 12 | Long cipher-like hex payload |
+| 13 | Rapid alternating dots and dashes (A B A B A B) |
+| 14 | Word gap `/` detection |
+| 15 | Variable speed — faster unit (30 ms) |
+| 16 | Variable speed — slower unit (120 ms) |
 
 ### Run all tests
 
@@ -261,10 +280,9 @@ since ~2020: Chrome, Firefox, Safari, Edge).
 
 ## License
 
-MIT — do whatever you like, no warranty.
+[MIT](LICENSE) — do whatever you like, no warranty.
 
 ---
 
 **Dedicated to my Dad — a Navy veteran who knew Morse code.
 We love you and miss you.**
->>>>>>> Stashed changes
