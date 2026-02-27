@@ -371,7 +371,7 @@
   <label for="message">Message:</label>
   <textarea id="message" rows="3" placeholder="Your secret message..."></textarea>
 
-  <label for="password">Password (for encryption):</label>
+  <label for="password">Password (for encryption, min 14 chars):</label>
   <div class="password-row">
     <input type="password" id="password" placeholder="Strong password (don’t reuse)" />
     <label class="checkbox-row" style="margin:0;">
@@ -721,7 +721,6 @@ async function aesGcmDecrypt(hex, password, pepper) {
 /** =========================
  *  Badge + row highlight
  *  ========================= */
- *  ========================= */
 function setTxVisual(on, label) {
   const badge = document.getElementById("txBadge");
   const txRow = document.getElementById("txRow");
@@ -837,6 +836,7 @@ function setStatus(text, cls = "status") {
   s.className = cls;
   s.textContent = text;
   outputEl.appendChild(s);
+  if (cls === "error") outputEl.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function appendLine(label, value) {
@@ -1110,15 +1110,10 @@ function clearAll() {
   // Reset fields
   document.getElementById('message').value = "";
   document.getElementById('password').value = "";
-<<<<<<< Updated upstream
-  document.getElementById('morseInput').value = "";
-  document.getElementById('decryptPassword').value = "";
-=======
   document.getElementById('pepper').value = "";
   document.getElementById('morseInput').value = "";
   document.getElementById('decryptPassword').value = "";
   document.getElementById('decryptPepper').value = "";
->>>>>>> Stashed changes
 
   // Reset uploaded audio
   if (uploadedAudioUrl) {
@@ -1148,8 +1143,8 @@ async function runDadMode() {
   const pw  = document.getElementById('password').value;
   const pep = document.getElementById('pepper').value;
 
-  if (!msg) { setStatus("Enter message", "error"); return; }
-  if (!pw || pw.length < 14) { setStatus("Longer password recommended (14+)", "error"); return; }
+  if (!msg) { setStatus("Enter a message first", "error"); return; }
+  if (!pw || pw.length < 14) { setStatus("Password must be at least 14 characters (currently " + (pw ? pw.length : 0) + ")", "error"); return; }
 
   setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
