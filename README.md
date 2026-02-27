@@ -236,3 +236,7 @@ since ~2020: Chrome, Firefox, Safari, Edge).
 ## License
 
 MIT — do whatever you like, no warranty.
+
+---
+
+**Dedicated to my Dad, a Navy vet — we love you and miss you.**
