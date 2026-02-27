@@ -171,10 +171,26 @@ TESTS = [
     (".....",                       "All-dots (hex '5')"),
     (".-",                          "Single character A"),
     (".---- ----- .---- -----",    "1 0 1 0 mixed"),
-    ("--. --- --- -.. .--- ----.",  "Cipher-like mix"),    # Test 9: extra leading + trailing silence must not affect output
+    ("--. --- --- -.. .--- ----.",  "Cipher-like mix"),
+    # Test 9: extra leading + trailing silence must not affect output
     ("_SILENCE_.- -..._SILENCE_",  "Leading/trailing silence padding"),
     # Test 10: stereo WAV decodes identically to mono
-    ("_STEREO_... --- ..._STEREO_", "Stereo WAV (two-channel)"),]
+    ("_STEREO_... --- ..._STEREO_", "Stereo WAV (two-channel)"),
+    # Test 11: all 16 hex-Morse characters round-trip
+    ("----- .---- ..--- ...-- ....- ..... -.... --... ---.. ----. .- -... -.-. -.. . ..-.",
+     "All 16 hex Morse chars (0-F)"),
+    # Test 12: long cipher-like payload (simulates real encrypted message Morse)
+    (".---- ----- .- ..-. -.-. -.. . ...-- --... ---.. ----. -.... ..... ....- ..--- -...",
+     "Long cipher-like hex payload"),
+    # Test 13: rapid alternating dots and dashes
+    (".- -... .- -... .- -...",    "Rapid alternating A B A B A B"),
+    # Test 14: word gap (/) between groups
+    ("_WORDGAP_.- -... / -.-. -.._WORDGAP_", "Word gap detection (/)"),
+    # Test 15: variable speed (faster unit)
+    ("_SPEED30_... --- ..._SPEED30_", "Faster unit (30 ms)"),
+    # Test 16: variable speed (slower unit)
+    ("_SPEED120_... --- ..._SPEED120_", "Slower unit (120 ms)"),
+]
 
 
 def write_wav_stereo(path, samples):
@@ -217,6 +233,39 @@ def run_tests():
             actual_morse = morse_in.replace("_STEREO_", "").strip("_")
             samples = synth_morse(actual_morse)
             write_wav_stereo(TMP_WAV, samples)
+            sr, wav_samples = read_wav(TMP_WAV)
+            decoded = decode_morse(wav_samples, sr)
+            passed  = decoded == actual_morse
+            if not passed:
+                all_pass = False
+            print(f"[{'PASS' if passed else 'FAIL'}] {desc}")
+            if not passed:
+                print(f"        expected : {actual_morse}")
+                print(f"        got      : {decoded}")
+            continue
+
+        # Test 14: word gap
+        if morse_in.startswith("_WORDGAP_"):
+            actual_morse = morse_in.replace("_WORDGAP_", "").strip("_")
+            write_wav(TMP_WAV, synth_morse(actual_morse))
+            sr, wav_samples = read_wav(TMP_WAV)
+            decoded = decode_morse(wav_samples, sr)
+            passed  = decoded == actual_morse
+            if not passed:
+                all_pass = False
+            print(f"[{'PASS' if passed else 'FAIL'}] {desc}")
+            if not passed:
+                print(f"        expected : {actual_morse}")
+                print(f"        got      : {decoded}")
+            continue
+
+        # Test 15/16: variable speed
+        if morse_in.startswith("_SPEED"):
+            import re as _re
+            m = _re.match(r"_SPEED(\d+)_(.+?)_SPEED\d+_$", morse_in)
+            speed_unit = int(m.group(1))
+            actual_morse = m.group(2)
+            write_wav(TMP_WAV, synth_morse(actual_morse, unit=speed_unit))
             sr, wav_samples = read_wav(TMP_WAV)
             decoded = decode_morse(wav_samples, sr)
             passed  = decoded == actual_morse

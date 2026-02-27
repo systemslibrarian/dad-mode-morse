@@ -20,7 +20,7 @@ involved.
 
 ```
 Sender
-  1. Type message + password → click Transmit
+  1. Type message + password (and optional **Signal Key**) → click Transmit
   2. App encrypts with AES-256-GCM (random salt + IV every time)
   3. Ciphertext hex → Morse code → audio beeps
   4. Click "Download Morse WAV" → share the .wav file
@@ -28,7 +28,7 @@ Sender
 Recipient
   1. Upload the .wav file
   2. Click "Decode WAV → Morse" → Morse string auto-populates
-  3. Enter the shared password → click Decrypt → read the message
+  3. Enter the shared password (and **Signal Key**, if used) → click Decrypt → read the message
 ```
 
 The WAV file is **safe to share publicly** — without the correct password it is
@@ -40,7 +40,7 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 
 ### Sender — Encrypt & transmit
 
-1. Enter your **message** and a strong **password** (8+ characters recommended)
+1. Enter your **message** and a strong **password** (**14+ characters recommended**, or a 4–5 word passphrase).
 2. Click **Transmit**
 3. The app encrypts your message and generates the Morse string
 4. Choose one or more ways to share:
@@ -71,11 +71,13 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 | Property | Value |
 |---|---|
 | Algorithm | AES-256-GCM (authenticated encryption with associated data) |
-| Key derivation | PBKDF2-HMAC-SHA256 |
+| Key derivation | PBKDF2-HMAC-SHA256 (calibrated per device; iterations stored in payload) |
+| Optional "Signal Key" (pepper) | User-supplied extra secret phrase (not stored/transmitted) |
 | KDF iterations | 150,000 |
 | Salt | 16 bytes, cryptographically random **per message** |
 | IV / nonce | 12 bytes, cryptographically random **per message** |
-| Payload layout | `salt(16 B) ‖ iv(12 B) ‖ ciphertext+tag(N B)` |
+| Payload layout | **DMM1 v2**: `"DMM1" ‖ ver ‖ kdf_id ‖ flags ‖ iters ‖ salt ‖ iv ‖ ciphertext+tag` (AAD-authenticated) |
+| Backwards compatibility | Can still decrypt legacy v1 payloads (`salt ‖ iv ‖ ciphertext`) |
 | Encoding | binary payload → lowercase hex → Morse (hex digits `0–9`, `A–F`) |
 | Crypto engine | Browser Web Crypto API (`crypto.subtle`) — zero third-party libs |
 
@@ -93,6 +95,19 @@ unreadable. The audio sounds like random beeps to anyone without the password.
   inspect it at any time
 
 ---
+
+
+---
+
+## Signal Key ("pepper")
+
+Dad Mode Morse supports an **optional** second shared secret called the **Signal Key** (a.k.a. *pepper*).
+
+- If the sender uses a Signal Key, the recipient **must** enter the same Signal Key to decrypt.
+- The Signal Key is **not stored** in the WAV payload and is **never transmitted**.
+- This greatly increases resistance to offline guessing attacks if the WAV is intercepted.
+
+Think of it like a call sign / authentication phrase — fitting for a Navy Morse heritage.
 
 ## WAV decoder
 
@@ -125,6 +140,17 @@ Heavily degraded (noisy) audio may introduce symbol errors.
 > GitHub Pages is case-sensitive — filenames must match exactly: `turtle.png`, `turtle.mp4`.
 
 ---
+
+
+---
+
+## Offline integrity (recommended)
+
+For maximum trust, download the repo (or just `index.html`) and run it locally (no network).
+
+Tip: publish a SHA-256 hash for each release so users can verify `index.html` hasn’t been tampered with.
+
+Current `index.html` SHA-256 (this commit): `b67a55df3079e7a5de276174a2d9b9fb011e07e1fa6bb46f2a289a17fdf8b5f7`
 
 ## Run locally
 
@@ -212,7 +238,7 @@ Both suites exit with code `0` on success and `1` on failure, so they work in CI
 
 ## Security considerations
 
-- **Use a strong, unique password.** The security of your message depends
+- **Use a strong, unique password (14+ chars or a passphrase).** The security of your message depends
   entirely on the password. Short or common passwords are the only real
   weakness in this system.
 - **Share the password out-of-band.** Don't send the password in the same
@@ -239,4 +265,6 @@ MIT — do whatever you like, no warranty.
 
 ---
 
-**Dedicated to my Dad, a Navy vet — we love you and miss you.**
+**Dedicated to my Dad — a Navy veteran who knew Morse code.
+We love you and miss you.**
+>>>>>>> Stashed changes

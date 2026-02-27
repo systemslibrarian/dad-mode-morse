@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
   <title>Encrypted Morse Messenger – AES + Sound</title>
   <style>
     body {
@@ -364,7 +365,7 @@
     3. Copy Morse, play audio, or download the audio WAV.<br>
     4. Share the WAV or the Morse string with the recipient.<br>
     5. Recipient uploads the WAV and clicks <strong>Decode WAV &rarr; Morse</strong>, or pastes the Morse string directly, then enters the same password and clicks <strong>Decrypt</strong>.<br><br>
-    <em>Security:</em> AES-256-GCM with random salt/IV + authentication (PBKDF2-SHA256).
+    <em>Security:</em> AES-256-GCM + authenticated metadata (AAD) + HKDF key separation. Password KDF: PBKDF2-SHA256 (calibrated per device). Optional Signal Key.
   </div>
 
   <label for="message">Message:</label>
@@ -379,7 +380,16 @@
     </label>
   </div>
 
-  <!-- Transmit + video side-by-side -->
+  
+  <label for="pepper">Signal Key (optional): <span class="help-tip" data-tip="Optional extra secret phrase (like a call sign). If used, the recipient MUST know it too. Not stored in the WAV.">?</span></label>
+  <div class="password-row">
+    <input type="password" id="pepper" placeholder="Optional Signal Key / Call Sign (share out-of-band)" />
+    <label class="checkbox-row" style="margin:0;">
+      <input type="checkbox" id="showPep" />
+      Show
+    </label>
+  </div>
+<!-- Transmit + video side-by-side -->
   <div class="tx-row" id="txRow">
     <div class="tx-row-left">
       <button id="txBtn">Transmit</button>
@@ -432,7 +442,16 @@
       </label>
     </div>
 
-    <label for="morseInput">Paste received Morse code here:</label>
+    
+    <label for="decryptPepper">Signal Key (optional): <span class="help-tip" data-tip="If the sender used a Signal Key, you must enter the same one here.">?</span></label>
+    <div class="password-row">
+      <input type="password" id="decryptPepper" placeholder="Optional Signal Key / Call Sign (must match sender)" />
+      <label class="checkbox-row" style="margin:0;">
+        <input type="checkbox" id="showDecPep" />
+        Show
+      </label>
+    </div>
+<label for="morseInput">Paste received Morse code here:</label>
     <textarea id="morseInput" rows="5" placeholder="Paste the full Morse string here..."></textarea>
 
     <div class="row" style="margin-top: 10px;">
@@ -472,63 +491,236 @@ function morseToHex(morse) {
 }
 
 /** =========================
- *  AES-GCM (PBKDF2)
+ *  DMM1 CONTAINER (v2) + KDF + HKDF + AES-GCM (AAD)
+ *  - Default KDF: PBKDF2-SHA256 (calibrated target time, iterations stored in header)
+ *  - Optional Signal Key ("pepper"): entered by user, NOT stored/transmitted
+ *  - Key separation: HKDF(master)->K_enc (+ reserve K_meta)
+ *  - AAD binds header + salt + iv to the ciphertext (tamper = decrypt fail)
+ *  - Backwards compatible: legacy v1 payloads still decrypt
  *  ========================= */
-async function aesGcmEncrypt(plaintext, password) {
-  const enc = new TextEncoder();
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
 
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits","deriveKey"]
-  );
+// DMM1 header layout (little endian):
+// 0..3   "DMM1"
+// 4      version = 0x01
+// 5      kdf_id  = 0x01 (PBKDF2) | 0x02 (Argon2id placeholder)
+// 6      flags   bit0 = pepper_used
+// 7      reserved
+// 8..11  pbkdf2_iters (uint32 LE)
+// 12..27 salt (16)
+// 28..39 iv   (12)
+// 40..   ciphertext+tag
+const DMM1_MAGIC = [0x44,0x4d,0x4d,0x31]; // "DMM1"
+const DMM1_VERSION = 0x01;
+const KDF_PBKDF2 = 0x01;
+const KDF_ARGON2ID = 0x02; // reserved (not implemented in this single-file build)
+const FLAG_PEPPER = 0x01;
 
-  const key = await crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt, iterations:150000, hash:"SHA-256"},
-    keyMaterial,
-    {name:"AES-GCM", length:256},
-    false, ["encrypt"]
-  );
+const PBKDF2_TARGET_MS = 300;      // aim ~300ms on this device
+const PBKDF2_MIN_ITERS = 50_000;
+const PBKDF2_MAX_ITERS = 1_200_000;
 
-  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, enc.encode(plaintext));
-
-  const combined = new Uint8Array(salt.length + iv.length + ct.byteLength);
-  combined.set(salt,0);
-  combined.set(iv, salt.length);
-  combined.set(new Uint8Array(ct), salt.length + iv.length);
-
-  const hex = Array.from(combined).map(b=>b.toString(16).padStart(2,'0')).join('');
-  return { hex };
+function u32le(n){
+  const b = new Uint8Array(4);
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0, n >>> 0, true);
+  return b;
+}
+function readU32le(bytes, off){
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(off, true);
 }
 
-async function aesGcmDecrypt(hex, password) {
-  if (!/^[0-9a-f]+$/i.test(hex) || hex.length < (16+12+1)*2) {
-    throw new Error("Invalid hex payload length/content");
+function concatPwPepper(password, pepper) {
+  const p = password || "";
+  const x = pepper || "";
+  return x ? (p + "\u0000" + x) : p;
+}
+
+function hexFromBytes(bytes){
+  return Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function bytesFromHex(hex){
+  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error("Invalid hex payload");
+  return new Uint8Array(hex.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+}
+
+async function deriveMasterPBKDF2(pwPep, salt, iterations){
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(pwPep), "PBKDF2", false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name:"PBKDF2", salt, iterations, hash:"SHA-256" },
+    keyMaterial,
+    256
+  );
+  return new Uint8Array(bits); // 32 bytes
+}
+
+async function hkdfSplit(masterBytes, salt, infoStr, out){
+  const baseKey = await crypto.subtle.importKey("raw", masterBytes, "HKDF", false, ["deriveBits","deriveKey"]);
+  const info = new TextEncoder().encode(infoStr);
+  if (out === "aes") {
+    return crypto.subtle.deriveKey(
+      { name:"HKDF", hash:"SHA-256", salt, info },
+      baseKey,
+      { name:"AES-GCM", length:256 },
+      false,
+      ["encrypt","decrypt"]
+    );
+  } else {
+    const bits = await crypto.subtle.deriveBits(
+      { name:"HKDF", hash:"SHA-256", salt, info },
+      baseKey,
+      256
+    );
+    return new Uint8Array(bits);
+  }
+}
+
+async function calibratePBKDF2Iterations(targetMs = PBKDF2_TARGET_MS) {
+  try {
+    const cached = localStorage.getItem("dmm_pbkdf2_iters_v2");
+    if (cached) {
+      const n = parseInt(cached, 10);
+      if (Number.isFinite(n) && n >= PBKDF2_MIN_ITERS && n <= PBKDF2_MAX_ITERS) return n;
+    }
+  } catch (_) {}
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const pw = "calibrate\u0000dmm";
+  const baseline = 150_000;
+
+  const t0 = performance.now();
+  await deriveMasterPBKDF2(pw, salt, baseline);
+  const t1 = performance.now();
+  const dt = Math.max(1, t1 - t0);
+
+  let iters = Math.round(baseline * (targetMs / dt));
+  iters = Math.max(PBKDF2_MIN_ITERS, Math.min(PBKDF2_MAX_ITERS, iters));
+  iters = Math.round(iters / 1000) * 1000;
+
+  try { localStorage.setItem("dmm_pbkdf2_iters_v2", String(iters)); } catch (_) {}
+  return iters;
+}
+
+function buildDmm1Header({kdfId, flags, iters, salt, iv}) {
+  const header = new Uint8Array(40);
+  header.set(DMM1_MAGIC, 0);
+  header[4] = DMM1_VERSION;
+  header[5] = kdfId;
+  header[6] = flags;
+  header[7] = 0x00;
+  header.set(u32le(iters), 8);
+  header.set(salt, 12);
+  header.set(iv, 28);
+  return header;
+}
+
+function isDmm1(bytes){
+  if (!bytes || bytes.length < 40) return false;
+  for (let i=0;i<4;i++) if (bytes[i] !== DMM1_MAGIC[i]) return false;
+  return true;
+}
+
+async function dmmEncryptV2(plaintext, password, pepper) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv   = crypto.getRandomValues(new Uint8Array(12));
+  const iters = await calibratePBKDF2Iterations(PBKDF2_TARGET_MS);
+
+  const pwPep = concatPwPepper(password, pepper);
+  const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+
+  const kEnc = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
+
+  const flags = pepper ? FLAG_PEPPER : 0x00;
+  const header = buildDmm1Header({kdfId:KDF_PBKDF2, flags, iters, salt, iv});
+  const additionalData = header;
+
+  const enc = new TextEncoder();
+  const ctBuf = await crypto.subtle.encrypt(
+    { name:"AES-GCM", iv, additionalData, tagLength:128 },
+    kEnc,
+    enc.encode(plaintext)
+  );
+
+  const ct = new Uint8Array(ctBuf);
+  const combined = new Uint8Array(header.length + ct.length);
+  combined.set(header, 0);
+  combined.set(ct, header.length);
+
+  return { hex: hexFromBytes(combined), meta: { iters, pepperUsed: !!pepper } };
+}
+
+async function dmmDecryptAny(hex, password, pepper) {
+  const bytes = bytesFromHex(hex);
+
+  if (isDmm1(bytes)) {
+    const ver = bytes[4];
+    if (ver !== DMM1_VERSION) throw new Error("Unsupported DMM version");
+    const kdfId = bytes[5];
+    const flags = bytes[6];
+    const iters = readU32le(bytes, 8);
+    const salt  = bytes.slice(12, 28);
+    const iv    = bytes.slice(28, 40);
+    const data  = bytes.slice(40);
+    const pepperUsed = (flags & FLAG_PEPPER) !== 0;
+
+    if (kdfId !== KDF_PBKDF2) {
+      throw new Error("This build supports PBKDF2 only (Argon2id is reserved for a future build).");
+    }
+    if (!Number.isFinite(iters) || iters < PBKDF2_MIN_ITERS || iters > PBKDF2_MAX_ITERS) {
+      throw new Error("Invalid KDF parameters");
+    }
+    if (pepperUsed && !pepper) {
+      throw new Error("Signal Key required (sender used a Signal Key).");
+    }
+
+    const pwPep = concatPwPepper(password, pepperUsed ? pepper : "");
+    const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+    const kEnc = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
+
+    const header = bytes.slice(0, 40);
+    const additionalData = header;
+
+    const ptBuf = await crypto.subtle.decrypt(
+      { name:"AES-GCM", iv, additionalData, tagLength:128 },
+      kEnc,
+      data
+    );
+    return new TextDecoder().decode(ptBuf);
   }
 
-  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+  // legacy v1
+  if (bytes.length < (16 + 12 + 1)) throw new Error("Invalid payload length");
   const salt = bytes.slice(0,16);
   const iv   = bytes.slice(16,28);
   const data = bytes.slice(28);
 
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits","deriveKey"]
+    "raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]
   );
-
   const key = await crypto.subtle.deriveKey(
     {name:"PBKDF2", salt, iterations:150000, hash:"SHA-256"},
     keyMaterial,
     {name:"AES-GCM", length:256},
     false, ["decrypt"]
   );
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
+  return new TextDecoder().decode(pt);
+}
 
-  const decrypted = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
-  return new TextDecoder().decode(decrypted);
+// Public helpers used by the UI
+async function aesGcmEncrypt(plaintext, password, pepper) {
+  return dmmEncryptV2(plaintext, password, pepper);
+}
+async function aesGcmDecrypt(hex, password, pepper) {
+  return dmmDecryptAny(hex, password, pepper);
 }
 
 /** =========================
  *  Badge + row highlight
+ *  ========================= */
  *  ========================= */
 function setTxVisual(on, label) {
   const badge = document.getElementById("txBadge");
@@ -918,8 +1110,15 @@ function clearAll() {
   // Reset fields
   document.getElementById('message').value = "";
   document.getElementById('password').value = "";
+<<<<<<< Updated upstream
   document.getElementById('morseInput').value = "";
   document.getElementById('decryptPassword').value = "";
+=======
+  document.getElementById('pepper').value = "";
+  document.getElementById('morseInput').value = "";
+  document.getElementById('decryptPassword').value = "";
+  document.getElementById('decryptPepper').value = "";
+>>>>>>> Stashed changes
 
   // Reset uploaded audio
   if (uploadedAudioUrl) {
@@ -947,9 +1146,10 @@ function clearAll() {
 async function runDadMode() {
   const msg = document.getElementById('message').value.trim();
   const pw  = document.getElementById('password').value;
+  const pep = document.getElementById('pepper').value;
 
   if (!msg) { setStatus("Enter message", "error"); return; }
-  if (!pw || pw.length < 8) { setStatus("Longer password recommended (8+)", "error"); return; }
+  if (!pw || pw.length < 14) { setStatus("Longer password recommended (14+)", "error"); return; }
 
   setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
@@ -962,7 +1162,7 @@ async function runDadMode() {
   playTurtleDuringTx();
 
   try {
-    const { hex } = await aesGcmEncrypt(msg, pw);
+    const { hex, meta } = await aesGcmEncrypt(msg, pw, pep);
     const morse = toMorseHex(hex);
 
     outputEl.innerHTML = "";
@@ -984,6 +1184,7 @@ async function runDadMode() {
       outputEl.appendChild(d);
     })();
 
+    appendLine("KDF:", `PBKDF2-SHA256 (iters=${meta?.iters ?? 'n/a'})` + (meta?.pepperUsed ? " + Signal Key" : ""));
     const hr = document.createElement("div");
     hr.className = "hr";
     outputEl.appendChild(hr);
@@ -1066,6 +1267,7 @@ async function runDadMode() {
 async function decryptDadMode() {
   const morse = document.getElementById('morseInput').value.trim();
   const pw = document.getElementById('decryptPassword').value;
+  const pep = document.getElementById('decryptPepper').value;
 
   if (!morse) { alert("Paste Morse first"); return; }
   if (!pw) { alert("Enter decryption password"); return; }
@@ -1074,7 +1276,7 @@ async function decryptDadMode() {
     const { hex, invalid } = morseToHex(morse);
     if (invalid || hex.includes('?')) throw new Error("Invalid Morse – check copy/paste or typos");
 
-    const plaintext = await aesGcmDecrypt(hex, pw);
+    const plaintext = await aesGcmDecrypt(hex, pw, pep);
 
     alert(`Success!\n\nOriginal message:\n${plaintext}`);
 
@@ -1354,8 +1556,14 @@ document.getElementById("decBtn").addEventListener("click", () => decryptDadMode
 document.getElementById("showPw").addEventListener("change", (e) => {
   document.getElementById("password").type = e.target.checked ? "text" : "password";
 });
+document.getElementById("showPep").addEventListener("change", (e) => {
+  document.getElementById("pepper").type = e.target.checked ? "text" : "password";
+});
 document.getElementById("showDecPw").addEventListener("change", (e) => {
   document.getElementById("decryptPassword").type = e.target.checked ? "text" : "password";
+});
+document.getElementById("showDecPep").addEventListener("change", (e) => {
+  document.getElementById("decryptPepper").type = e.target.checked ? "text" : "password";
 });
 
 const signalSliderEl = document.getElementById("signalSlider");
