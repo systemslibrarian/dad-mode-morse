@@ -9,7 +9,10 @@ involved.
 > No servers. No accounts. No data leaves your browser. Works 100% offline.
 
 ---
-
+> [!IMPORTANT]
+> **Note for Morse Hobbyists:**
+> This app does **not** use standard Alphanumeric Morse for your message. Because the message is encrypted first, the sounds you hear are a Morse-encoded version of the **AES Ciphertext (Hex)**. Typing "SOS" will not produce `... --- ...`; it will produce the Morse equivalent of the encrypted hex string.
+---
 ## Live Demo
 
 ✅ https://systemslibrarian.github.io/dad-mode-morse/
