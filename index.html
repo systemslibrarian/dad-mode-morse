@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://cdn.jsdelivr.net; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://cdn.jsdelivr.net; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
   <title>Encrypted Morse Messenger – AES + Sound</title>
   <style>
     body {
@@ -554,12 +554,12 @@ const FLAG_PEPPER = 0x01;
 // Argon2id default params (target ~300-500ms)
 const ARGON2_TARGET_MS = 400;
 const ARGON2_DEFAULT_TIME_COST = 4;
-const ARGON2_DEFAULT_MEMORY_KIB = 65536; // 64 MiB
+const ARGON2_DEFAULT_MEMORY_KIB = 65535; // ~64 MiB (max uint16)
 const ARGON2_DEFAULT_PARALLELISM = 4;
 const ARGON2_MIN_TIME_COST = 2;
 const ARGON2_MAX_TIME_COST = 16;
 const ARGON2_MIN_MEMORY_KIB = 16384;  // 16 MiB minimum
-const ARGON2_MAX_MEMORY_KIB = 262144; // 256 MiB maximum
+const ARGON2_MAX_MEMORY_KIB = 65535; // uint16 max (header field is 2 bytes)
 
 // Argon2id WASM state
 let argon2Ready = false;
@@ -577,9 +577,13 @@ function readU16le(bytes, off) {
 }
 
 function concatPwPepper(password, pepper) {
+  // Length-prefixed domain separation prevents collisions when password
+  // or pepper contain the separator character.
   const p = password || "";
   const x = pepper || "";
-  return x ? (p + "\u0000" + x) : p;
+  if (!x) return p;
+  // Format: <pw_len_hex>:pw\x00<pep_len_hex>:pep — unambiguous parse
+  return p.length.toString(16) + ":" + p + "\u0000" + x.length.toString(16) + ":" + x;
 }
 
 function hexFromBytes(bytes){
@@ -597,6 +601,8 @@ async function loadArgon2() {
   try {
     // Use argon2-browser from jsdelivr CDN
     const cdnUrl = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
+    // SRI hash to prevent supply-chain tampering
+    const sriHash = 'sha384-XOR3aNvHciLPIf6r+2glkrmbBbLmIJ1EChMXjw8eBKBf8gE0rDq1TyUNuRdorOqi';
     
     // Dynamically load the script
     await new Promise((resolve, reject) => {
@@ -613,9 +619,11 @@ async function loadArgon2() {
       
       const script = document.createElement('script');
       script.src = cdnUrl;
+      script.integrity = sriHash;
+      script.crossOrigin = 'anonymous';
       script.async = true;
       script.onload = resolve;
-      script.onerror = () => reject(new Error('Failed to load Argon2 library from CDN'));
+      script.onerror = () => reject(new Error('Failed to load Argon2 library from CDN (integrity check may have failed)'));
       document.head.appendChild(script);
     });
     
@@ -681,9 +689,21 @@ async function calibrateArgon2id(targetMs = ARGON2_TARGET_MS) {
     const cached = localStorage.getItem("dmm_argon2_params_v1");
     if (cached) {
       const parsed = JSON.parse(cached);
-      if (parsed.timeCost && parsed.memoryCostKiB && parsed.parallelism) {
+      // Validate cached params are numbers within allowed bounds
+      if (typeof parsed.timeCost === 'number'
+          && typeof parsed.memoryCostKiB === 'number'
+          && typeof parsed.parallelism === 'number'
+          && Number.isInteger(parsed.timeCost)
+          && Number.isInteger(parsed.memoryCostKiB)
+          && Number.isInteger(parsed.parallelism)
+          && parsed.timeCost >= ARGON2_MIN_TIME_COST && parsed.timeCost <= ARGON2_MAX_TIME_COST
+          && parsed.memoryCostKiB >= ARGON2_MIN_MEMORY_KIB && parsed.memoryCostKiB <= ARGON2_MAX_MEMORY_KIB
+          && parsed.parallelism >= 1 && parsed.parallelism <= 16) {
         argon2CalibratedParams = parsed;
         return parsed;
+      } else {
+        // Cached params invalid/out of range — recalibrate
+        localStorage.removeItem("dmm_argon2_params_v1");
       }
     }
   } catch (_) {}
@@ -1182,7 +1202,9 @@ function stopMorsePlayback() {
     st.endTimer = null;
   }
   if (st.audioCtx && st.audioCtx.state !== "closed") {
-    st.audioCtx.close();
+    // Capture ref before nulling; close() is async but we can safely discard the old context
+    const ctx = st.audioCtx;
+    ctx.close().catch(() => {});
   }
   st.audioCtx = null;
   st.gainNode = null;
@@ -1516,8 +1538,24 @@ async function runDadMode() {
     copyBtn.className = "copy-btn";
     copyBtn.textContent = "Copy Morse";
     copyBtn.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(morse);
-      alert("Copied!");
+      try {
+        await navigator.clipboard.writeText(morse);
+        showToast("Morse copied to clipboard!");
+      } catch (e) {
+        // Fallback: select text for manual copy
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = morse;
+          ta.style.cssText = 'position:fixed;left:-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+          showToast("Morse copied to clipboard!");
+        } catch (_) {
+          alert("Could not copy to clipboard. Please select and copy the Morse text manually.");
+        }
+      }
     });
 
     const playPauseBtn = document.createElement("button");
@@ -1537,8 +1575,9 @@ async function runDadMode() {
     wavBtn.textContent = "Download Morse WAV";
     wavBtn.addEventListener("click", () => {
       try {
-        const sig = signalQuality();
-        const blob = synthMorseWavBlob(morse, { unitMs: MorseTiming.unitMs, freqHz: MorseTiming.freqHz, noise: (100 - sig) / 100, signalLevel: sig });
+        // Always use signal=100 for downloadable WAV so the file is decryptable.
+        // Signal degradation is a live-playback effect only.
+        const blob = synthMorseWavBlob(morse, { unitMs: MorseTiming.unitMs, freqHz: MorseTiming.freqHz, noise: 0, signalLevel: 100 });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -1546,7 +1585,8 @@ async function runDadMode() {
         document.body.appendChild(a);
         a.click();
         a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        // Revoke after generous delay so the download can finish
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
       } catch (e) {
         alert("Could not generate WAV: " + (e?.message || String(e)));
       }

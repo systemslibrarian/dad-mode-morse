@@ -2,7 +2,6 @@
 # run10x.sh - Run all test suites 10 times to verify consistency
 # Tests: AES-256-GCM encryption, Morse encoding, Ed25519 signing, WAV decode
 
-set -e
 cd /workspaces/dad-mode-morse
 
 echo "=============================================="
@@ -20,18 +19,22 @@ DECODE_FAIL=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
   printf "\n=== Run $i/10 ===\n"
   
-  # Run crypto tests
+  # Run crypto tests (capture output, show summary)
   echo "🔐 Encryption tests..."
-  if node test_crypto.mjs 2>&1 | tail -5; then
+  CRYPTO_OUT=$(node test_crypto.mjs 2>&1) && CRYPTO_RC=0 || CRYPTO_RC=$?
+  echo "$CRYPTO_OUT" | tail -5
+  if [ $CRYPTO_RC -eq 0 ]; then
     ((CRYPTO_PASS++))
   else
     ((CRYPTO_FAIL++))
     echo "   ❌ Crypto tests failed on run $i"
   fi
   
-  # Run decode tests
+  # Run decode tests (capture output, show summary)
   echo "📡 WAV decode tests..."
-  if python3 test_decode.py 2>&1 | tail -3; then
+  DECODE_OUT=$(python3 test_decode.py 2>&1) && DECODE_RC=0 || DECODE_RC=$?
+  echo "$DECODE_OUT" | tail -3
+  if [ $DECODE_RC -eq 0 ]; then
     ((DECODE_PASS++))
   else
     ((DECODE_FAIL++))

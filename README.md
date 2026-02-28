@@ -80,7 +80,7 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 | Algorithm | AES-256-GCM (authenticated encryption with associated data) |
 | Key derivation | Argon2id (memory-hard KDF, calibrated per device; params stored in payload) |
 | Optional "Signal Key" (pepper) | User-supplied extra secret phrase (not stored/transmitted) |
-| Argon2id params | timeCost: 4, memoryCost: 64 MiB, parallelism: 4 (defaults, auto-calibrated) |
+| Argon2id params | timeCost: 4, memoryCost: ~64 MiB (65535 KiB, uint16 max), parallelism: 4 (defaults, auto-calibrated) |
 | Salt | 16 bytes, cryptographically random **per message** |
 | IV / nonce | 12 bytes, cryptographically random **per message** |
 | Payload layout | **DMM1 v2**: `"DMM1" ‖ ver ‖ kdf_id ‖ flags ‖ argon2_params ‖ salt ‖ iv ‖ ciphertext+tag` (AAD-authenticated) |
@@ -179,7 +179,7 @@ For maximum trust, download the repo (or just `index.html`) and run it locally (
 
 Tip: publish a SHA-256 hash for each release so users can verify `index.html` hasn’t been tampered with.
 
-Current `index.html` SHA-256 (this commit): `b67a55df3079e7a5de276174a2d9b9fb011e07e1fa6bb46f2a289a17fdf8b5f7`
+Current `index.html` SHA-256 (this commit): `9bc87dd92b7fd21a08a29cca15163cff80780f77fa9999d6d7cfdc552acb9f77`
 
 ## Run locally
 
@@ -237,9 +237,9 @@ node test_crypto.mjs
 | 16 | No pepper → FLAG_PEPPER bit is 0 |
 | 17 | With pepper → FLAG_PEPPER bit is 1 |
 | 18 | Tampered header (AAD) is rejected |
-| 19 | Legacy v1 payload decrypts correctly (backward compat) |
-| 20 | PBKDF2 iterations stored in header match encrypt params |
-| 21 | `concatPwPepper` combines password + pepper with NUL separator |
+| 19 | Non-DMM1 payload is rejected |
+| 20 | Argon2id params in header match encrypt params |
+| 21 | `concatPwPepper` uses length-prefixed domain separation (no collision) |
 | 22 | HKDF key separation: different info → different keys |
 | 23 | `isDmm1` rejects invalid inputs |
 | 24 | `bytesFromHex` rejects invalid hex |
@@ -301,8 +301,8 @@ Both suites exit with code `0` on success and `1` on failure, so they work in CI
 - **Audio duration leaks approximate message length.** WAV duration is
   proportional to ciphertext length. This is an inherent property of the
   Morse-audio transport — not a flaw in the cryptography.
-- **PBKDF2 at 150k iterations** makes offline brute-force expensive but not
-  impossible for very short passwords. Use 12+ random characters for sensitive
+- **Argon2id** (memory-hard KDF, auto-calibrated to ~400ms) makes offline
+  brute-force extremely expensive. Use 14+ random characters for sensitive
   messages.
 
 ---

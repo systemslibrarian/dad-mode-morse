@@ -48,7 +48,7 @@ const FLAG_PEPPER    = 0x01;
 const ARGON2_MIN_TIME_COST = 2;
 const ARGON2_MAX_TIME_COST = 16;
 const ARGON2_MIN_MEMORY_KIB = 16384;  // 16 MiB minimum
-const ARGON2_MAX_MEMORY_KIB = 262144; // 256 MiB maximum
+const ARGON2_MAX_MEMORY_KIB = 65535; // uint16 max (header field is 2 bytes)
 // Use minimal params for fast testing
 const TEST_TIME_COST = 2;
 const TEST_MEMORY_KIB = 16384; // 16 MiB
@@ -66,9 +66,13 @@ function readU16le(bytes, off) {
 }
 
 function concatPwPepper(password, pepper) {
+  // Length-prefixed domain separation prevents collisions when password
+  // or pepper contain the separator character.
   const p = password || "";
   const x = pepper || "";
-  return x ? (p + "\u0000" + x) : p;
+  if (!x) return p;
+  // Format: <pw_len_hex>:pw\x00<pep_len_hex>:pep — unambiguous parse
+  return p.length.toString(16) + ":" + p + "\u0000" + x.length.toString(16) + ":" + x;
 }
 
 function hexFromBytes(bytes) {
@@ -516,19 +520,19 @@ await test("Tampered header (AAD) is rejected", async () => {
   assert(threw, "Should have rejected tampered AAD (header)");
 });
 
-// 19. Legacy v1 payload is rejected (no backward compat)
-await test("Legacy v1 payload is rejected (no backward compat)", async () => {
-  // Create a fake legacy v1 payload (no DMM1 magic, just salt+iv+ciphertext)
+// 19. Non-DMM1 payload is rejected
+await test("Non-DMM1 payload is rejected", async () => {
+  // Create a fake payload without DMM1 magic header
   const fakeHex = "00".repeat(16 + 12 + 32); // salt + iv + fake ciphertext
   let threw = false;
   try { await dmmDecryptAny(fakeHex, "anyPassword12345"); } catch (e) {
     threw = e.message.includes("Invalid payload format");
   }
-  assert(threw, "Should reject legacy v1 payloads");
+  assert(threw, "Should reject non-DMM1 payloads");
 });
 
 // 20. Argon2id params stored in header match what was used
-await test("Argon2id params stored in header match encrypt params", async () => {
+await test("Argon2id params in header match encrypt params", async () => {
   const timeCost = 3;
   const memoryCostKiB = 32768;
   const parallelism = 4;
@@ -545,12 +549,16 @@ await test("Argon2id params stored in header match encrypt params", async () => 
     `Expected parallelism ${parallelism} in header, got ${storedParallelism}`);
 });
 
-// 21. concatPwPepper helper works correctly
-await test("concatPwPepper combines password + pepper with NUL separator", () => {
-  assert(concatPwPepper("pw", "pep") === "pw\u0000pep", "Should join with NUL");
+// 21. concatPwPepper helper works correctly with length-prefixed domain separation
+await test("concatPwPepper uses length-prefixed domain separation", () => {
+  // With pepper: "<pw_len_hex>:pw\0<pep_len_hex>:pep"
+  assert(concatPwPepper("pw", "pep") === "2:pw\u00003:pep", "Should use length-prefixed format");
   assert(concatPwPepper("pw", "") === "pw", "Empty pepper should return password only");
   assert(concatPwPepper("pw", null) === "pw", "Null pepper should return password only");
-  assert(concatPwPepper("", "pep") === "\u0000pep", "Empty password with pepper");
+  assert(concatPwPepper("", "pep") === "0:\u00003:pep", "Empty password with pepper");
+  // Verify no collision between password-with-NUL and password+pepper
+  assert(concatPwPepper("abc\u0000def", "") !== concatPwPepper("abc", "def"),
+    "Must not collide when password contains NUL");
 });
 
 // 22. HKDF produces different keys for different info strings
@@ -715,7 +723,7 @@ await test("Ed25519 browser support detection works", async () => {
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log(
   exitCode === 0
-    ? "\n=== All 32 encryption tests passed ==="
+    ? "\n=== All 32 tests passed ==="
     : "\n=== SOME TESTS FAILED ==="
 );
 process.exit(exitCode);
