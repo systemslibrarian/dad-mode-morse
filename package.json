@@ -1,0 +1,26 @@
+{
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "jsdom": "^28.1.0",
+    "playwright": "^1.58.2"
+  },
+  "name": "dad-mode-morse",
+  "version": "1.0.0",
+  "description": "A tiny **offline-friendly** single-page web app that encrypts messages with AES-256-GCM, converts the ciphertext to Morse code, and lets you play or download it as a WAV audio file. Recipients can upload the WAV, decode it back to Morse, and decrypt the message — all in the browser, with no server involved.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/systemslibrarian/dad-mode-morse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/systemslibrarian/dad-mode-morse/issues"
+  },
+  "homepage": "https://github.com/systemslibrarian/dad-mode-morse#readme"
+}

@@ -44,10 +44,12 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 ### Sender — Encrypt & transmit
 
 1. Enter your **message** and a strong **password** (**14+ characters recommended**, or a 4–5 word passphrase).
-2. Click **Transmit**
-3. The app encrypts your message and generates the Morse string
-4. Choose one or more ways to share:
+2. *(Optional)* Enable **Ed25519 Signing** and paste your private key to prove authenticity
+3. Click **Transmit**
+4. The app encrypts your message and generates the Morse string
+5. Choose one or more ways to share:
    - **Copy Morse** — share the Morse text string directly
+   - **Copy Morse + Signature** — includes Ed25519 signature (if signing enabled)
    - **Play Morse Sound** — listen to the beeps (pause/resume supported)
    - **Download Morse WAV** — save a `.wav` file to share
 
@@ -59,13 +61,15 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 **Received a WAV file:**
 1. Upload it using the file picker in the decrypt section
 2. Click **Decode WAV → Morse** — the Morse string auto-fills
-3. Enter the shared password
-4. Click **Decrypt** → the original message appears
+3. *(Optional)* Paste sender's Ed25519 **public key** to verify signature
+4. Enter the shared password
+5. Click **Decrypt** → the original message appears (with signature verification status)
 
 **Received a Morse string:**
-1. Paste it into the *"Paste received Morse code here"* field
-2. Enter the shared password
-3. Click **Decrypt**
+1. Paste it into the *"Paste received Morse code here"* field (include signature line if present)
+2. *(Optional)* Paste sender's Ed25519 **public key**
+3. Enter the shared password
+4. Click **Decrypt**
 
 ---
 
@@ -74,15 +78,37 @@ unreadable. The audio sounds like random beeps to anyone without the password.
 | Property | Value |
 |---|---|
 | Algorithm | AES-256-GCM (authenticated encryption with associated data) |
-| Key derivation | PBKDF2-HMAC-SHA256 (calibrated per device; iterations stored in payload) |
+| Key derivation | Argon2id (memory-hard KDF, calibrated per device; params stored in payload) |
 | Optional "Signal Key" (pepper) | User-supplied extra secret phrase (not stored/transmitted) |
-| KDF iterations | 150,000 |
+| Argon2id params | timeCost: 4, memoryCost: 64 MiB, parallelism: 4 (defaults, auto-calibrated) |
 | Salt | 16 bytes, cryptographically random **per message** |
 | IV / nonce | 12 bytes, cryptographically random **per message** |
-| Payload layout | **DMM1 v2**: `"DMM1" ‖ ver ‖ kdf_id ‖ flags ‖ iters ‖ salt ‖ iv ‖ ciphertext+tag` (AAD-authenticated) |
-| Backwards compatibility | Can still decrypt legacy v1 payloads (`salt ‖ iv ‖ ciphertext`) |
+| Payload layout | **DMM1 v2**: `"DMM1" ‖ ver ‖ kdf_id ‖ flags ‖ argon2_params ‖ salt ‖ iv ‖ ciphertext+tag` (AAD-authenticated) |
+| Backwards compatibility | None (Argon2id only — no legacy PBKDF2 support) |
 | Encoding | binary payload → lowercase hex → Morse (hex digits `0–9`, `A–F`) |
-| Crypto engine | Browser Web Crypto API (`crypto.subtle`) — zero third-party libs |
+| Crypto engine | Browser Web Crypto API (`crypto.subtle`) + Argon2id WASM (CDN) |
+
+### Ed25519 Digital Signatures (optional)
+
+Dad Mode Morse now supports **optional Ed25519 signing** for sender authenticity:
+
+| Property | Value |
+|---|---|
+| Algorithm | Ed25519 (RFC 8032) |
+| Key format | PKCS#8 (private), SPKI (public), both base64-encoded |
+| Signature | 64 bytes, base64-encoded, appended to output (NOT encrypted) |
+| Use case | Proves the sender is who they claim to be |
+
+**How it works:**
+- **Sender** enables signing, pastes their Ed25519 private key, and transmits
+- The plaintext message is signed (NOT the ciphertext)
+- The signature is displayed separately — share it alongside the Morse code
+- **Recipient** pastes the sender's public key in the decrypt section
+- On decrypt, the signature is verified against the decrypted plaintext
+- If invalid → tampering warning; if no key → warning but decrypt proceeds
+
+**Generate keys:**
+Click "Generate Ed25519 Key Pair" to create a new keypair. The private key auto-fills; the public key copies to clipboard. **Keep your private key secret!**
 
 ### Security properties
 
@@ -92,7 +118,7 @@ unreadable. The audio sounds like random beeps to anyone without the password.
   never silently returning garbage
 - **Semantic security** — random salt + random IV means the same plaintext +
   password produces a different ciphertext every single time
-- **No key reuse** — PBKDF2 derives the AES key from password + salt; the raw
+- **No key reuse** — Argon2id derives the AES key from password + salt; the raw
   password is never stored or transmitted
 - **Fully auditable** — the entire application is in one file (`index.html`);
   inspect it at any time
@@ -218,6 +244,13 @@ node test_crypto.mjs
 | 23 | `isDmm1` rejects invalid inputs |
 | 24 | `bytesFromHex` rejects invalid hex |
 | 25 | Full pipeline with pepper: encrypt → Morse → decrypt |
+| 26 | Ed25519 key generation produces valid keypair |
+| 27 | Ed25519 sign + verify round-trip (valid signature) |
+| 28 | Ed25519 verification fails with wrong public key |
+| 29 | Ed25519 verification fails with tampered message |
+| 30 | Ed25519 signature extraction from input text |
+| 31 | Ed25519 full pipeline: sign plaintext → encrypt → decrypt → verify |
+| 32 | Ed25519 browser support detection |
 
 ### WAV decode tests — `test_decode.py`
 

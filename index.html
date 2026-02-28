@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src https://cdn.jsdelivr.net; base-uri 'none'; object-src 'none'; frame-ancestors 'none';" />
   <title>Encrypted Morse Messenger – AES + Sound</title>
   <style>
     body {
@@ -340,6 +340,12 @@
       pointer-events: none;
     }
     #toastMsg.show { opacity: 1; transform: translateY(0); }
+
+    /* Private key textarea masking */
+    #ed25519PrivateKey {
+      -webkit-text-security: disc;
+      text-security: disc;
+    }
   </style>
 </head>
 <body>
@@ -365,7 +371,7 @@
     3. Copy Morse, play audio, or download the audio WAV.<br>
     4. Share the WAV or the Morse string with the recipient.<br>
     5. Recipient uploads the WAV and clicks <strong>Decode WAV &rarr; Morse</strong>, or pastes the Morse string directly, then enters the same password and clicks <strong>Decrypt</strong>.<br><br>
-    <em>Security:</em> AES-256-GCM + authenticated metadata (AAD) + HKDF key separation. Password KDF: PBKDF2-SHA256 (calibrated per device). Optional Signal Key.
+    <em>Security:</em> AES-256-GCM + authenticated metadata (AAD) + HKDF key separation. Password KDF: <strong>Argon2id</strong> (memory-hard, calibrated per device). Optional Signal Key.
   </div>
 
   <label for="message">Message:</label>
@@ -389,6 +395,29 @@
       Show
     </label>
   </div>
+
+  <div class="hr"></div>
+
+  <!-- Ed25519 Signing Section -->
+  <div class="checkbox-row">
+    <input type="checkbox" id="enableSigning" />
+    <label for="enableSigning" style="margin:0;font-weight:bold;">Enable Ed25519 Signing (adds sender authenticity) <span class="help-tip" data-tip="When enabled, the plaintext message is signed with your Ed25519 private key. The recipient can verify with your public key that you (and only you) sent this message. Signature is NOT encrypted—it's appended to output.">?</span></label>
+  </div>
+
+  <div id="signingSection" style="display:none; padding: 12px; background: #0d1a0d; border-radius: 8px; border: 1px solid #006633; margin: 10px 0;">
+    <div class="row" style="margin-bottom: 10px;">
+      <button type="button" id="generateEd25519Btn">Generate Ed25519 Key Pair</button>
+    </div>
+    <label for="ed25519PrivateKey">Your Ed25519 Private Key (base64 PKCS8): <span class="help-tip" data-tip="Paste your Ed25519 private key in base64 (PKCS8 format). Keep this SECRET—do not share! Used to sign messages.">?</span></label>
+    <div class="password-row">
+      <textarea id="ed25519PrivateKey" rows="2" placeholder="Paste your Ed25519 private key (base64 PKCS8) here..." style="font-size:13px;"></textarea>
+      <label class="checkbox-row" style="margin:0;">
+        <input type="checkbox" id="showPrivKey" />
+        Show
+      </label>
+    </div>
+  </div>
+
 <!-- Transmit + video side-by-side -->
   <div class="tx-row" id="txRow">
     <div class="tx-row-left">
@@ -451,6 +480,13 @@
         Show
       </label>
     </div>
+
+    <div class="hr"></div>
+
+    <!-- Ed25519 Verification Section -->
+    <label for="ed25519PublicKey">Sender's Ed25519 Public Key (base64 SPKI, optional): <span class="help-tip" data-tip="If the sender signed their message, paste their PUBLIC key here (base64 SPKI) to verify authenticity. If signature is present but no key is provided, you'll see a warning.">?</span></label>
+    <textarea id="ed25519PublicKey" rows="2" placeholder="Paste sender's Ed25519 public key (base64 SPKI) here for signature verification..." style="font-size:13px;"></textarea>
+
 <label for="morseInput">Paste received Morse code here:</label>
     <textarea id="morseInput" rows="5" placeholder="Paste the full Morse string here..."></textarea>
 
@@ -491,42 +527,53 @@ function morseToHex(morse) {
 }
 
 /** =========================
- *  DMM1 CONTAINER (v2) + KDF + HKDF + AES-GCM (AAD)
- *  - Default KDF: PBKDF2-SHA256 (calibrated target time, iterations stored in header)
+ *  DMM1 CONTAINER (v2) + Argon2id KDF + HKDF + AES-GCM (AAD)
+ *  - KDF: Argon2id (memory-hard, calibrated ~300-500ms)
  *  - Optional Signal Key ("pepper"): entered by user, NOT stored/transmitted
  *  - Key separation: HKDF(master)->K_enc (+ reserve K_meta)
  *  - AAD binds header + salt + iv to the ciphertext (tamper = decrypt fail)
- *  - Backwards compatible: legacy v1 payloads still decrypt
  *  ========================= */
 
-// DMM1 header layout (little endian):
+// DMM1 header layout (little endian) - Argon2id version:
 // 0..3   "DMM1"
-// 4      version = 0x01
-// 5      kdf_id  = 0x01 (PBKDF2) | 0x02 (Argon2id placeholder)
+// 4      version = 0x02 (Argon2id)
+// 5      kdf_id  = 0x02 (Argon2id)
 // 6      flags   bit0 = pepper_used
-// 7      reserved
-// 8..11  pbkdf2_iters (uint32 LE)
+// 7      timeCost (uint8)
+// 8..9   memoryCostKiB (uint16 LE)
+// 10     parallelism (uint8)
+// 11     reserved
 // 12..27 salt (16)
 // 28..39 iv   (12)
 // 40..   ciphertext+tag
 const DMM1_MAGIC = [0x44,0x4d,0x4d,0x31]; // "DMM1"
-const DMM1_VERSION = 0x01;
-const KDF_PBKDF2 = 0x01;
-const KDF_ARGON2ID = 0x02; // reserved (not implemented in this single-file build)
+const DMM1_VERSION = 0x02;
+const KDF_ARGON2ID = 0x02;
 const FLAG_PEPPER = 0x01;
 
-const PBKDF2_TARGET_MS = 300;      // aim ~300ms on this device
-const PBKDF2_MIN_ITERS = 50_000;
-const PBKDF2_MAX_ITERS = 1_200_000;
+// Argon2id default params (target ~300-500ms)
+const ARGON2_TARGET_MS = 400;
+const ARGON2_DEFAULT_TIME_COST = 4;
+const ARGON2_DEFAULT_MEMORY_KIB = 65536; // 64 MiB
+const ARGON2_DEFAULT_PARALLELISM = 4;
+const ARGON2_MIN_TIME_COST = 2;
+const ARGON2_MAX_TIME_COST = 16;
+const ARGON2_MIN_MEMORY_KIB = 16384;  // 16 MiB minimum
+const ARGON2_MAX_MEMORY_KIB = 262144; // 256 MiB maximum
 
-function u32le(n){
-  const b = new Uint8Array(4);
+// Argon2id WASM state
+let argon2Ready = false;
+let argon2Module = null;
+let argon2CalibratedParams = null;
+
+function u16le(n) {
+  const b = new Uint8Array(2);
   const dv = new DataView(b.buffer);
-  dv.setUint32(0, n >>> 0, true);
+  dv.setUint16(0, n & 0xFFFF, true);
   return b;
 }
-function readU32le(bytes, off){
-  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(off, true);
+function readU16le(bytes, off) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(off, true);
 }
 
 function concatPwPepper(password, pepper) {
@@ -543,17 +590,65 @@ function bytesFromHex(hex){
   return new Uint8Array(hex.match(/.{1,2}/g).map(b=>parseInt(b,16)));
 }
 
-async function deriveMasterPBKDF2(pwPep, salt, iterations){
+// Load Argon2id WASM from CDN
+async function loadArgon2() {
+  if (argon2Ready && argon2Module) return argon2Module;
+  
+  try {
+    // Use argon2-browser from jsdelivr CDN
+    const cdnUrl = 'https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js';
+    
+    // Dynamically load the script
+    await new Promise((resolve, reject) => {
+      const existingScript = document.querySelector(`script[src="${cdnUrl}"]`);
+      if (existingScript) {
+        if (window.argon2) {
+          resolve();
+          return;
+        }
+        existingScript.addEventListener('load', resolve);
+        existingScript.addEventListener('error', reject);
+        return;
+      }
+      
+      const script = document.createElement('script');
+      script.src = cdnUrl;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Failed to load Argon2 library from CDN'));
+      document.head.appendChild(script);
+    });
+    
+    if (!window.argon2) {
+      throw new Error('Argon2 library not available after loading');
+    }
+    
+    argon2Module = window.argon2;
+    argon2Ready = true;
+    return argon2Module;
+  } catch (e) {
+    throw new Error(`Argon2id initialization failed: ${e.message}`);
+  }
+}
+
+// Derive master key using Argon2id
+async function deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism) {
+  const argon2 = await loadArgon2();
+  
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(pwPep), "PBKDF2", false, ["deriveBits"]
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name:"PBKDF2", salt, iterations, hash:"SHA-256" },
-    keyMaterial,
-    256
-  );
-  return new Uint8Array(bits); // 32 bytes
+  const passwordBytes = enc.encode(pwPep);
+  
+  const result = await argon2.hash({
+    pass: passwordBytes,
+    salt: salt,
+    time: timeCost,
+    mem: memoryCostKiB,
+    parallelism: parallelism,
+    hashLen: 32,
+    type: argon2.ArgonType.Argon2id
+  });
+  
+  return new Uint8Array(result.hash);
 }
 
 async function hkdfSplit(masterBytes, salt, infoStr, out){
@@ -577,40 +672,69 @@ async function hkdfSplit(masterBytes, salt, infoStr, out){
   }
 }
 
-async function calibratePBKDF2Iterations(targetMs = PBKDF2_TARGET_MS) {
+// Calibrate Argon2id parameters to target ~300-500ms
+async function calibrateArgon2id(targetMs = ARGON2_TARGET_MS) {
+  // Check cache
+  if (argon2CalibratedParams) return argon2CalibratedParams;
+  
   try {
-    const cached = localStorage.getItem("dmm_pbkdf2_iters_v2");
+    const cached = localStorage.getItem("dmm_argon2_params_v1");
     if (cached) {
-      const n = parseInt(cached, 10);
-      if (Number.isFinite(n) && n >= PBKDF2_MIN_ITERS && n <= PBKDF2_MAX_ITERS) return n;
+      const parsed = JSON.parse(cached);
+      if (parsed.timeCost && parsed.memoryCostKiB && parsed.parallelism) {
+        argon2CalibratedParams = parsed;
+        return parsed;
+      }
     }
   } catch (_) {}
 
+  await loadArgon2();
+  
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const pw = "calibrate\u0000dmm";
-  const baseline = 150_000;
-
+  
+  // Start with default params and adjust timeCost
+  let timeCost = ARGON2_DEFAULT_TIME_COST;
+  let memoryCostKiB = ARGON2_DEFAULT_MEMORY_KIB;
+  let parallelism = ARGON2_DEFAULT_PARALLELISM;
+  
+  // Run benchmark with baseline timeCost=2
+  const baselineTime = 2;
   const t0 = performance.now();
-  await deriveMasterPBKDF2(pw, salt, baseline);
+  await deriveMasterArgon2id(pw, salt, baselineTime, memoryCostKiB, parallelism);
   const t1 = performance.now();
   const dt = Math.max(1, t1 - t0);
-
-  let iters = Math.round(baseline * (targetMs / dt));
-  iters = Math.max(PBKDF2_MIN_ITERS, Math.min(PBKDF2_MAX_ITERS, iters));
-  iters = Math.round(iters / 1000) * 1000;
-
-  try { localStorage.setItem("dmm_pbkdf2_iters_v2", String(iters)); } catch (_) {}
-  return iters;
+  
+  // Scale timeCost to reach target
+  timeCost = Math.round(baselineTime * (targetMs / dt));
+  timeCost = Math.max(ARGON2_MIN_TIME_COST, Math.min(ARGON2_MAX_TIME_COST, timeCost));
+  
+  // If still too slow with min timeCost, reduce memory
+  if (dt > targetMs * 2 && memoryCostKiB > ARGON2_MIN_MEMORY_KIB) {
+    memoryCostKiB = Math.max(ARGON2_MIN_MEMORY_KIB, Math.round(memoryCostKiB * (targetMs / dt)));
+    timeCost = ARGON2_DEFAULT_TIME_COST;
+  }
+  
+  const params = { timeCost, memoryCostKiB, parallelism };
+  argon2CalibratedParams = params;
+  
+  try { 
+    localStorage.setItem("dmm_argon2_params_v1", JSON.stringify(params)); 
+  } catch (_) {}
+  
+  return params;
 }
 
-function buildDmm1Header({kdfId, flags, iters, salt, iv}) {
+function buildDmm1Header({kdfId, flags, timeCost, memoryCostKiB, parallelism, salt, iv}) {
   const header = new Uint8Array(40);
   header.set(DMM1_MAGIC, 0);
   header[4] = DMM1_VERSION;
   header[5] = kdfId;
   header[6] = flags;
-  header[7] = 0x00;
-  header.set(u32le(iters), 8);
+  header[7] = timeCost;
+  header.set(u16le(memoryCostKiB), 8);
+  header[10] = parallelism;
+  header[11] = 0x00; // reserved
   header.set(salt, 12);
   header.set(iv, 28);
   return header;
@@ -625,15 +749,18 @@ function isDmm1(bytes){
 async function dmmEncryptV2(plaintext, password, pepper) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv   = crypto.getRandomValues(new Uint8Array(12));
-  const iters = await calibratePBKDF2Iterations(PBKDF2_TARGET_MS);
+  
+  // Calibrate and get Argon2id params
+  const params = await calibrateArgon2id(ARGON2_TARGET_MS);
+  const { timeCost, memoryCostKiB, parallelism } = params;
 
   const pwPep = concatPwPepper(password, pepper);
-  const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+  const master = await deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism);
 
   const kEnc = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
 
   const flags = pepper ? FLAG_PEPPER : 0x00;
-  const header = buildDmm1Header({kdfId:KDF_PBKDF2, flags, iters, salt, iv});
+  const header = buildDmm1Header({kdfId: KDF_ARGON2ID, flags, timeCost, memoryCostKiB, parallelism, salt, iv});
   const additionalData = header;
 
   const enc = new TextEncoder();
@@ -648,7 +775,7 @@ async function dmmEncryptV2(plaintext, password, pepper) {
   combined.set(header, 0);
   combined.set(ct, header.length);
 
-  return { hex: hexFromBytes(combined), meta: { iters, pepperUsed: !!pepper } };
+  return { hex: hexFromBytes(combined), meta: { timeCost, memoryCostKiB, parallelism, pepperUsed: !!pepper } };
 }
 
 async function dmmDecryptAny(hex, password, pepper) {
@@ -656,27 +783,35 @@ async function dmmDecryptAny(hex, password, pepper) {
 
   if (isDmm1(bytes)) {
     const ver = bytes[4];
-    if (ver !== DMM1_VERSION) throw new Error("Unsupported DMM version");
+    if (ver !== DMM1_VERSION) throw new Error("Unsupported DMM version (expected v2/Argon2id)");
     const kdfId = bytes[5];
     const flags = bytes[6];
-    const iters = readU32le(bytes, 8);
+    const timeCost = bytes[7];
+    const memoryCostKiB = readU16le(bytes, 8);
+    const parallelism = bytes[10];
     const salt  = bytes.slice(12, 28);
     const iv    = bytes.slice(28, 40);
     const data  = bytes.slice(40);
     const pepperUsed = (flags & FLAG_PEPPER) !== 0;
 
-    if (kdfId !== KDF_PBKDF2) {
-      throw new Error("This build supports PBKDF2 only (Argon2id is reserved for a future build).");
+    if (kdfId !== KDF_ARGON2ID) {
+      throw new Error("Unsupported KDF. This version only supports Argon2id (kdf_id=0x02).");
     }
-    if (!Number.isFinite(iters) || iters < PBKDF2_MIN_ITERS || iters > PBKDF2_MAX_ITERS) {
-      throw new Error("Invalid KDF parameters");
+    if (timeCost < ARGON2_MIN_TIME_COST || timeCost > ARGON2_MAX_TIME_COST) {
+      throw new Error("Invalid Argon2id timeCost parameter");
+    }
+    if (memoryCostKiB < ARGON2_MIN_MEMORY_KIB || memoryCostKiB > ARGON2_MAX_MEMORY_KIB) {
+      throw new Error("Invalid Argon2id memoryCost parameter");
+    }
+    if (parallelism < 1 || parallelism > 16) {
+      throw new Error("Invalid Argon2id parallelism parameter");
     }
     if (pepperUsed && !pepper) {
       throw new Error("Signal Key required (sender used a Signal Key).");
     }
 
     const pwPep = concatPwPepper(password, pepperUsed ? pepper : "");
-    const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+    const master = await deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism);
     const kEnc = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
 
     const header = bytes.slice(0, 40);
@@ -690,24 +825,8 @@ async function dmmDecryptAny(hex, password, pepper) {
     return new TextDecoder().decode(ptBuf);
   }
 
-  // legacy v1
-  if (bytes.length < (16 + 12 + 1)) throw new Error("Invalid payload length");
-  const salt = bytes.slice(0,16);
-  const iv   = bytes.slice(16,28);
-  const data = bytes.slice(28);
-
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]
-  );
-  const key = await crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt, iterations:150000, hash:"SHA-256"},
-    keyMaterial,
-    {name:"AES-GCM", length:256},
-    false, ["decrypt"]
-  );
-  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, data);
-  return new TextDecoder().decode(pt);
+  // No legacy fallback - Argon2id only
+  throw new Error("Invalid payload format. Expected DMM1 v2 (Argon2id) container.");
 }
 
 // Public helpers used by the UI
@@ -716,6 +835,120 @@ async function aesGcmEncrypt(plaintext, password, pepper) {
 }
 async function aesGcmDecrypt(hex, password, pepper) {
   return dmmDecryptAny(hex, password, pepper);
+}
+
+/** =========================
+ *  ED25519 SIGNING/VERIFICATION (Web Crypto)
+ *  ========================= */
+const ED25519_SIG_LINE_PREFIX = "Ed25519 Signature (base64): ";
+
+function base64ToBytes(b64) {
+  const binStr = atob(b64);
+  const bytes = new Uint8Array(binStr.length);
+  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  let binStr = '';
+  for (const b of bytes) binStr += String.fromCharCode(b);
+  return btoa(binStr);
+}
+
+async function checkEd25519Support() {
+  try {
+    const testKey = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    return !!testKey;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function generateEd25519KeyPair() {
+  const isSupported = await checkEd25519Support();
+  if (!isSupported) {
+    throw new Error("Ed25519 is not supported in this browser. Try Chrome 113+, Edge 113+, or Safari 17+.");
+  }
+
+  const keyPair = await crypto.subtle.generateKey(
+    "Ed25519",
+    true, // extractable
+    ["sign", "verify"]
+  );
+
+  // Export private key as PKCS8
+  const privateKeyExported = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  const privateKeyBase64 = bytesToBase64(new Uint8Array(privateKeyExported));
+
+  // Export public key as SPKI
+  const publicKeyExported = await crypto.subtle.exportKey("spki", keyPair.publicKey);
+  const publicKeyBase64 = bytesToBase64(new Uint8Array(publicKeyExported));
+
+  return { privateKeyBase64, publicKeyBase64 };
+}
+
+async function importEd25519PrivateKey(base64Pkcs8) {
+  const keyData = base64ToBytes(base64Pkcs8);
+  return crypto.subtle.importKey(
+    "pkcs8",
+    keyData,
+    "Ed25519",
+    false,
+    ["sign"]
+  );
+}
+
+async function importEd25519PublicKey(base64Spki) {
+  const keyData = base64ToBytes(base64Spki);
+  return crypto.subtle.importKey(
+    "spki",
+    keyData,
+    "Ed25519",
+    false,
+    ["verify"]
+  );
+}
+
+async function signMessageEd25519(message, privateKeyBase64) {
+  const privateKey = await importEd25519PrivateKey(privateKeyBase64);
+  const enc = new TextEncoder();
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    enc.encode(message)
+  );
+  return bytesToBase64(new Uint8Array(signature));
+}
+
+async function verifySignatureEd25519(message, signatureBase64, publicKeyBase64) {
+  const publicKey = await importEd25519PublicKey(publicKeyBase64);
+  const enc = new TextEncoder();
+  const sigBytes = base64ToBytes(signatureBase64);
+  return crypto.subtle.verify(
+    "Ed25519",
+    publicKey,
+    sigBytes,
+    enc.encode(message)
+  );
+}
+
+function extractSignatureFromInput(inputText) {
+  // Look for signature line at end of input
+  const lines = inputText.trim().split('\n');
+  let signatureBase64 = null;
+  let morseOnly = inputText;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line.startsWith(ED25519_SIG_LINE_PREFIX)) {
+      signatureBase64 = line.slice(ED25519_SIG_LINE_PREFIX.length).trim();
+      // Remove signature line from morse
+      morseOnly = lines.slice(0, i).join('\n').trim();
+      break;
+    }
+  }
+
+  return { morseOnly, signatureBase64 };
 }
 
 /** =========================
@@ -1129,6 +1362,12 @@ function clearAll() {
   document.getElementById('morseInput').value = "";
   document.getElementById('decryptPassword').value = "";
   document.getElementById('decryptPepper').value = "";
+  
+  // Reset Ed25519 fields
+  document.getElementById('ed25519PrivateKey').value = "";
+  document.getElementById('ed25519PublicKey').value = "";
+  document.getElementById('enableSigning').checked = false;
+  document.getElementById('signingSection').style.display = "none";
 
   // Reset uploaded audio
   if (uploadedAudioUrl) {
@@ -1157,9 +1396,17 @@ async function runDadMode() {
   const msg = document.getElementById('message').value.trim();
   const pw  = document.getElementById('password').value;
   const pep = document.getElementById('pepper').value;
+  const signingEnabled = document.getElementById('enableSigning').checked;
+  const privateKeyBase64 = document.getElementById('ed25519PrivateKey').value.trim();
 
   if (!msg) { setStatus("Enter a message first", "error"); return; }
   if (!pw || pw.length < 14) { setStatus("Password must be at least 14 characters (currently " + (pw ? pw.length : 0) + ")", "error"); return; }
+
+  // Validate signing inputs if enabled
+  if (signingEnabled && !privateKeyBase64) {
+    setStatus("Ed25519 signing enabled but no private key provided", "error");
+    return;
+  }
 
   setTxVisual(true, "ENCRYPT");
   setStatus("Encrypting (AES-256-GCM)...", "status");
@@ -1171,7 +1418,23 @@ async function runDadMode() {
   // play the MP4 next to the Transmit button (reliably)
   playTurtleDuringTx();
 
+  let signatureBase64 = null;
+
   try {
+    // Sign the plaintext if enabled
+    if (signingEnabled) {
+      setTxVisual(true, "SIGNING");
+      setStatus("Signing message (Ed25519)...", "status");
+      try {
+        signatureBase64 = await signMessageEd25519(msg, privateKeyBase64);
+      } catch (sigErr) {
+        throw new Error("Ed25519 signing failed: " + (sigErr?.message || String(sigErr)));
+      }
+    }
+
+    setTxVisual(true, "ENCRYPT");
+    setStatus("Encrypting (AES-256-GCM)...", "status");
+
     const { hex, meta } = await aesGcmEncrypt(msg, pw, pep);
     const morse = toMorseHex(hex);
 
@@ -1261,6 +1524,47 @@ async function runDadMode() {
     btnRow.appendChild(wavBtn);
     outputEl.appendChild(btnRow);
 
+    // Display Ed25519 signature if signing was enabled
+    if (signatureBase64) {
+      const sigHr = document.createElement("div");
+      sigHr.className = "hr";
+      outputEl.appendChild(sigHr);
+
+      const sigDiv = document.createElement("div");
+      sigDiv.style.cssText = "background:#0a1a0a;padding:12px;border-radius:6px;border:1px solid #006633;margin-top:8px;";
+
+      const sigTitle = document.createElement("strong");
+      sigTitle.style.color = "#88ffcc";
+      sigTitle.textContent = "🔏 Ed25519 Signature:";
+      sigDiv.appendChild(sigTitle);
+      sigDiv.appendChild(document.createElement("br"));
+
+      const sigText = document.createElement("code");
+      sigText.style.cssText = "font-size:12px;word-break:break-all;color:#ccffdd;";
+      sigText.textContent = ED25519_SIG_LINE_PREFIX + signatureBase64;
+      sigDiv.appendChild(sigText);
+
+      const sigCopyBtn = document.createElement("button");
+      sigCopyBtn.className = "copy-btn";
+      sigCopyBtn.style.marginTop = "8px";
+      sigCopyBtn.textContent = "Copy Morse + Signature";
+      sigCopyBtn.addEventListener("click", async () => {
+        const fullOutput = morse + "\n" + ED25519_SIG_LINE_PREFIX + signatureBase64;
+        await navigator.clipboard.writeText(fullOutput);
+        alert("Copied Morse code + signature to clipboard!");
+      });
+      sigDiv.appendChild(document.createElement("br"));
+      sigDiv.appendChild(sigCopyBtn);
+
+      const sigNote = document.createElement("div");
+      sigNote.className = "mini";
+      sigNote.style.marginTop = "8px";
+      sigNote.textContent = "Share your PUBLIC key with the recipient so they can verify this signature. The signature is NOT encrypted or embedded in the Morse—include it when sharing.";
+      sigDiv.appendChild(sigNote);
+
+      outputEl.appendChild(sigDiv);
+    }
+
     // End transmit visuals (honors minimum visible animation time)
     stopTurtleTx(false);
 
@@ -1275,29 +1579,92 @@ async function runDadMode() {
 }
 
 async function decryptDadMode() {
-  const morse = document.getElementById('morseInput').value.trim();
+  const rawInput = document.getElementById('morseInput').value.trim();
   const pw = document.getElementById('decryptPassword').value;
   const pep = document.getElementById('decryptPepper').value;
+  const publicKeyBase64 = document.getElementById('ed25519PublicKey').value.trim();
 
-  if (!morse) { alert("Paste Morse first"); return; }
+  if (!rawInput) { alert("Paste Morse first"); return; }
   if (!pw) { alert("Enter decryption password"); return; }
 
   try {
+    // Extract signature if present
+    const { morseOnly, signatureBase64 } = extractSignatureFromInput(rawInput);
+    const morse = morseOnly;
+
     const { hex, invalid } = morseToHex(morse);
     if (invalid || hex.includes('?')) throw new Error("Invalid Morse – check copy/paste or typos");
 
     const plaintext = await aesGcmDecrypt(hex, pw, pep);
 
-    alert(`Success!\n\nOriginal message:\n${plaintext}`);
+    // Handle signature verification
+    let sigStatus = "none";
+    let sigMessage = "";
+
+    if (signatureBase64) {
+      if (publicKeyBase64) {
+        // Verify signature
+        try {
+          const isValid = await verifySignatureEd25519(plaintext, signatureBase64, publicKeyBase64);
+          if (isValid) {
+            sigStatus = "valid";
+            sigMessage = "✅ Signature VALID – message authenticity confirmed!";
+          } else {
+            sigStatus = "invalid";
+            sigMessage = "⚠️ SIGNATURE INVALID – message may have been tampered with or wrong public key!";
+          }
+        } catch (verifyErr) {
+          sigStatus = "error";
+          sigMessage = "⚠️ Signature verification error: " + (verifyErr?.message || String(verifyErr));
+        }
+      } else {
+        sigStatus = "no-key";
+        sigMessage = "⚠️ Signature present but no public key provided – cannot verify authenticity. Proceed with caution.";
+      }
+    }
+
+    // Build result message
+    let resultMsg = `Success!\n\nOriginal message:\n${plaintext}`;
+    if (sigMessage) {
+      resultMsg += `\n\n${sigMessage}`;
+    }
+
+    // Check if signature was invalid - warn but still show decrypted message
+    if (sigStatus === "invalid") {
+      alert(`⚠️ WARNING: SIGNATURE INVALID!\n\nThe message decrypted successfully, but the signature verification FAILED.\n\nThis could mean:\n• The message was tampered with\n• Wrong sender public key\n• Signature was corrupted\n\nDecrypted message:\n${plaintext}\n\nProceed with extreme caution!`);
+    } else {
+      alert(resultMsg);
+    }
 
     const br = document.createElement("br");
     outputEl.appendChild(br);
 
     const safe = document.createElement("div");
     safe.className = "status";
-    safe.style.color = "#88ffcc";
+    safe.style.color = sigStatus === "invalid" ? "#ff6666" : "#88ffcc";
     safe.textContent = `Decrypted: ${plaintext}`;
     outputEl.appendChild(safe);
+
+    // Display signature status in output
+    if (sigMessage) {
+      const sigStatusDiv = document.createElement("div");
+      sigStatusDiv.style.cssText = "margin-top:8px;padding:10px;border-radius:6px;font-family:monospace;";
+      if (sigStatus === "valid") {
+        sigStatusDiv.style.background = "#0a2a0a";
+        sigStatusDiv.style.border = "1px solid #00aa66";
+        sigStatusDiv.style.color = "#00ff88";
+      } else if (sigStatus === "invalid" || sigStatus === "error") {
+        sigStatusDiv.style.background = "#2a0a0a";
+        sigStatusDiv.style.border = "1px solid #aa0000";
+        sigStatusDiv.style.color = "#ff6666";
+      } else {
+        sigStatusDiv.style.background = "#2a2a0a";
+        sigStatusDiv.style.border = "1px solid #aa8800";
+        sigStatusDiv.style.color = "#ffcc00";
+      }
+      sigStatusDiv.textContent = sigMessage;
+      outputEl.appendChild(sigStatusDiv);
+    }
 
   } catch (err) {
     alert(`Failed: ${err.message}\n\nLikely causes:\n- Wrong password\n- Incomplete/invalid Morse\n- Typos in Morse`);
@@ -1574,6 +1941,57 @@ document.getElementById("showDecPw").addEventListener("change", (e) => {
 });
 document.getElementById("showDecPep").addEventListener("change", (e) => {
   document.getElementById("decryptPepper").type = e.target.checked ? "text" : "password";
+});
+
+// Ed25519 signing section toggle
+document.getElementById("enableSigning").addEventListener("change", (e) => {
+  const signingSection = document.getElementById("signingSection");
+  signingSection.style.display = e.target.checked ? "block" : "none";
+});
+
+// Show/hide private key
+document.getElementById("showPrivKey").addEventListener("change", (e) => {
+  const privKeyArea = document.getElementById("ed25519PrivateKey");
+  // Textareas don't have type attribute, so we use a CSS workaround
+  privKeyArea.style.webkitTextSecurity = e.target.checked ? "none" : "disc";
+  privKeyArea.style.textSecurity = e.target.checked ? "none" : "disc";
+});
+
+// Generate Ed25519 key pair button
+document.getElementById("generateEd25519Btn").addEventListener("click", async () => {
+  const btn = document.getElementById("generateEd25519Btn");
+  btn.disabled = true;
+  btn.textContent = "Generating...";
+  
+  try {
+    const { privateKeyBase64, publicKeyBase64 } = await generateEd25519KeyPair();
+    
+    // Auto-fill private key field
+    document.getElementById("ed25519PrivateKey").value = privateKeyBase64;
+    
+    // Show the keys in an alert
+    const keyInfo = `Ed25519 Key Pair Generated!\n\n` +
+      `🔒 PRIVATE KEY (PKCS8 base64) - KEEP SECRET:\n${privateKeyBase64}\n\n` +
+      `🔓 PUBLIC KEY (SPKI base64) - SHARE WITH RECIPIENTS:\n${publicKeyBase64}\n\n` +
+      `The private key has been auto-filled above.\n` +
+      `Copy and save both keys securely!`;
+    
+    alert(keyInfo);
+    
+    // Also copy public key to clipboard for convenience
+    try {
+      await navigator.clipboard.writeText(publicKeyBase64);
+      showToast("Public key copied to clipboard!");
+    } catch (_) {
+      // Clipboard might not be available
+    }
+    
+  } catch (err) {
+    alert("Error generating key pair: " + (err?.message || String(err)));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Generate Ed25519 Key Pair";
+  }
 });
 
 const signalSliderEl = document.getElementById("signalSlider");

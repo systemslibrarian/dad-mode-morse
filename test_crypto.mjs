@@ -2,12 +2,14 @@
  * test_crypto.mjs
  * ---------------
  * Encryption/decryption test suite for the Encrypted Morse Messenger.
- * Uses the exact same DMM1 v2 container format (AES-256-GCM + PBKDF2 +
+ * Uses the exact same DMM1 v2 container format (AES-256-GCM + Argon2id +
  * HKDF + AAD + optional Signal Key) as index.html.
  *
  * Run with:
  *   node test_crypto.mjs
  */
+
+import argon2 from 'argon2';
 
 // ── Exact copies of the app's Morse + crypto functions ──────────────────────
 
@@ -38,23 +40,29 @@ function morseToHex(morse) {
 // ── DMM1 Container (v2) constants and helpers ───────────────────────────────
 
 const DMM1_MAGIC     = [0x44, 0x4d, 0x4d, 0x31]; // "DMM1"
-const DMM1_VERSION   = 0x01;
-const KDF_PBKDF2     = 0x01;
+const DMM1_VERSION   = 0x02;
+const KDF_ARGON2ID   = 0x02;
 const FLAG_PEPPER    = 0x01;
 
-const PBKDF2_MIN_ITERS = 50_000;
-const PBKDF2_MAX_ITERS = 1_200_000;
-const TEST_ITERS       = 100_000; // fixed for fast tests
+// Argon2id params (fast for tests)
+const ARGON2_MIN_TIME_COST = 2;
+const ARGON2_MAX_TIME_COST = 16;
+const ARGON2_MIN_MEMORY_KIB = 16384;  // 16 MiB minimum
+const ARGON2_MAX_MEMORY_KIB = 262144; // 256 MiB maximum
+// Use minimal params for fast testing
+const TEST_TIME_COST = 2;
+const TEST_MEMORY_KIB = 16384; // 16 MiB
+const TEST_PARALLELISM = 2;
 
-function u32le(n) {
-  const b = new Uint8Array(4);
+function u16le(n) {
+  const b = new Uint8Array(2);
   const dv = new DataView(b.buffer);
-  dv.setUint32(0, n >>> 0, true);
+  dv.setUint16(0, n & 0xFFFF, true);
   return b;
 }
 
-function readU32le(bytes, off) {
-  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(off, true);
+function readU16le(bytes, off) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(off, true);
 }
 
 function concatPwPepper(password, pepper) {
@@ -72,17 +80,22 @@ function bytesFromHex(hex) {
   return new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
 }
 
-async function deriveMasterPBKDF2(pwPep, salt, iterations) {
+async function deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism) {
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(pwPep), "PBKDF2", false, ["deriveBits"]
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
-    keyMaterial,
-    256
-  );
-  return new Uint8Array(bits);
+  const passwordBytes = enc.encode(pwPep);
+  
+  // Native argon2 package uses different API
+  const hash = await argon2.hash(Buffer.from(passwordBytes), {
+    type: argon2.argon2id,
+    salt: Buffer.from(salt),
+    timeCost: timeCost,
+    memoryCost: memoryCostKiB,
+    parallelism: parallelism,
+    hashLength: 32,
+    raw: true
+  });
+  
+  return new Uint8Array(hash);
 }
 
 async function hkdfSplit(masterBytes, salt, infoStr, out) {
@@ -106,14 +119,16 @@ async function hkdfSplit(masterBytes, salt, infoStr, out) {
   }
 }
 
-function buildDmm1Header({ kdfId, flags, iters, salt, iv }) {
+function buildDmm1Header({ kdfId, flags, timeCost, memoryCostKiB, parallelism, salt, iv }) {
   const header = new Uint8Array(40);
   header.set(DMM1_MAGIC, 0);
   header[4] = DMM1_VERSION;
   header[5] = kdfId;
   header[6] = flags;
-  header[7] = 0x00;
-  header.set(u32le(iters), 8);
+  header[7] = timeCost;
+  header.set(u16le(memoryCostKiB), 8);
+  header[10] = parallelism;
+  header[11] = 0x00; // reserved
   header.set(salt, 12);
   header.set(iv, 28);
   return header;
@@ -125,18 +140,18 @@ function isDmm1(bytes) {
   return true;
 }
 
-// ── Encrypt / Decrypt (v2 + legacy v1 fallback) ─────────────────────────────
+// ── Encrypt / Decrypt (v2 Argon2id only) ───────────────────────────────────
 
-async function dmmEncryptV2(plaintext, password, pepper, iters = TEST_ITERS) {
+async function dmmEncryptV2(plaintext, password, pepper, timeCost = TEST_TIME_COST, memoryCostKiB = TEST_MEMORY_KIB, parallelism = TEST_PARALLELISM) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv   = crypto.getRandomValues(new Uint8Array(12));
 
   const pwPep  = concatPwPepper(password, pepper);
-  const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+  const master = await deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism);
   const kEnc   = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
 
   const flags  = pepper ? FLAG_PEPPER : 0x00;
-  const header = buildDmm1Header({ kdfId: KDF_PBKDF2, flags, iters, salt, iv });
+  const header = buildDmm1Header({ kdfId: KDF_ARGON2ID, flags, timeCost, memoryCostKiB, parallelism, salt, iv });
   const additionalData = header;
 
   const enc   = new TextEncoder();
@@ -151,7 +166,7 @@ async function dmmEncryptV2(plaintext, password, pepper, iters = TEST_ITERS) {
   combined.set(header, 0);
   combined.set(ct, header.length);
 
-  return { hex: hexFromBytes(combined), meta: { iters, pepperUsed: !!pepper } };
+  return { hex: hexFromBytes(combined), meta: { timeCost, memoryCostKiB, parallelism, pepperUsed: !!pepper } };
 }
 
 async function dmmDecryptAny(hex, password, pepper) {
@@ -159,24 +174,30 @@ async function dmmDecryptAny(hex, password, pepper) {
 
   if (isDmm1(bytes)) {
     const ver   = bytes[4];
-    if (ver !== DMM1_VERSION) throw new Error("Unsupported DMM version");
+    if (ver !== DMM1_VERSION) throw new Error("Unsupported DMM version (expected v2/Argon2id)");
     const kdfId = bytes[5];
     const flags = bytes[6];
-    const iters = readU32le(bytes, 8);
+    const timeCost = bytes[7];
+    const memoryCostKiB = readU16le(bytes, 8);
+    const parallelism = bytes[10];
     const salt  = bytes.slice(12, 28);
     const iv    = bytes.slice(28, 40);
     const data  = bytes.slice(40);
     const pepperUsed = (flags & FLAG_PEPPER) !== 0;
 
-    if (kdfId !== KDF_PBKDF2)
-      throw new Error("This build supports PBKDF2 only (Argon2id is reserved for a future build).");
-    if (!Number.isFinite(iters) || iters < PBKDF2_MIN_ITERS || iters > PBKDF2_MAX_ITERS)
-      throw new Error("Invalid KDF parameters");
+    if (kdfId !== KDF_ARGON2ID)
+      throw new Error("Unsupported KDF. This version only supports Argon2id (kdf_id=0x02).");
+    if (timeCost < ARGON2_MIN_TIME_COST || timeCost > ARGON2_MAX_TIME_COST)
+      throw new Error("Invalid Argon2id timeCost parameter");
+    if (memoryCostKiB < ARGON2_MIN_MEMORY_KIB || memoryCostKiB > ARGON2_MAX_MEMORY_KIB)
+      throw new Error("Invalid Argon2id memoryCost parameter");
+    if (parallelism < 1 || parallelism > 16)
+      throw new Error("Invalid Argon2id parallelism parameter");
     if (pepperUsed && !pepper)
       throw new Error("Signal Key required (sender used a Signal Key).");
 
     const pwPep  = concatPwPepper(password, pepperUsed ? pepper : "");
-    const master = await deriveMasterPBKDF2(pwPep, salt, iters);
+    const master = await deriveMasterArgon2id(pwPep, salt, timeCost, memoryCostKiB, parallelism);
     const kEnc   = await hkdfSplit(master, salt, "dad-mode-morse:v2:enc", "aes");
 
     const headerSlice    = bytes.slice(0, 40);
@@ -190,44 +211,8 @@ async function dmmDecryptAny(hex, password, pepper) {
     return new TextDecoder().decode(ptBuf);
   }
 
-  // legacy v1 fallback (no container, fixed 150 000 iterations, no pepper)
-  if (bytes.length < (16 + 12 + 1)) throw new Error("Invalid payload length");
-  const salt = bytes.slice(0, 16);
-  const iv   = bytes.slice(16, 28);
-  const data = bytes.slice(28);
-
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]
-  );
-  const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false, ["decrypt"]
-  );
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
-  return new TextDecoder().decode(pt);
-}
-
-// Legacy v1 encrypt (used only to produce v1 blobs for backward-compat tests)
-async function legacyV1Encrypt(plaintext, password) {
-  const enc  = new TextEncoder();
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv   = crypto.getRandomValues(new Uint8Array(12));
-  const km   = await crypto.subtle.importKey(
-    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits", "deriveKey"]
-  );
-  const key  = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
-    km, { name: "AES-GCM", length: 256 }, false, ["encrypt"]
-  );
-  const ct       = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext));
-  const combined = new Uint8Array(salt.length + iv.length + ct.byteLength);
-  combined.set(salt, 0);
-  combined.set(iv, salt.length);
-  combined.set(new Uint8Array(ct), salt.length + iv.length);
-  return { hex: Array.from(combined).map(b => b.toString(16).padStart(2, '0')).join('') };
+  // No legacy fallback - Argon2id only
+  throw new Error("Invalid payload format. Expected DMM1 v2 (Argon2id) container.");
 }
 
 // Public wrappers (mirror index.html)
@@ -236,6 +221,108 @@ async function aesGcmEncrypt(plaintext, password, pepper) {
 }
 async function aesGcmDecrypt(hex, password, pepper) {
   return dmmDecryptAny(hex, password, pepper);
+}
+
+// ── Ed25519 Signing/Verification (mirror index.html) ────────────────────────
+
+const ED25519_SIG_LINE_PREFIX = "Ed25519 Signature (base64): ";
+
+function base64ToBytes(b64) {
+  const binStr = Buffer.from(b64, 'base64').toString('binary');
+  const bytes = new Uint8Array(binStr.length);
+  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  return Buffer.from(bytes).toString('base64');
+}
+
+async function checkEd25519Support() {
+  try {
+    const testKey = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    return !!testKey;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function generateEd25519KeyPair() {
+  const keyPair = await crypto.subtle.generateKey(
+    "Ed25519",
+    true,
+    ["sign", "verify"]
+  );
+
+  const privateKeyExported = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  const privateKeyBase64 = bytesToBase64(new Uint8Array(privateKeyExported));
+
+  const publicKeyExported = await crypto.subtle.exportKey("spki", keyPair.publicKey);
+  const publicKeyBase64 = bytesToBase64(new Uint8Array(publicKeyExported));
+
+  return { privateKeyBase64, publicKeyBase64, keyPair };
+}
+
+async function importEd25519PrivateKey(base64Pkcs8) {
+  const keyData = base64ToBytes(base64Pkcs8);
+  return crypto.subtle.importKey(
+    "pkcs8",
+    keyData,
+    "Ed25519",
+    false,
+    ["sign"]
+  );
+}
+
+async function importEd25519PublicKey(base64Spki) {
+  const keyData = base64ToBytes(base64Spki);
+  return crypto.subtle.importKey(
+    "spki",
+    keyData,
+    "Ed25519",
+    false,
+    ["verify"]
+  );
+}
+
+async function signMessageEd25519(message, privateKeyBase64) {
+  const privateKey = await importEd25519PrivateKey(privateKeyBase64);
+  const enc = new TextEncoder();
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    enc.encode(message)
+  );
+  return bytesToBase64(new Uint8Array(signature));
+}
+
+async function verifySignatureEd25519(message, signatureBase64, publicKeyBase64) {
+  const publicKey = await importEd25519PublicKey(publicKeyBase64);
+  const enc = new TextEncoder();
+  const sigBytes = base64ToBytes(signatureBase64);
+  return crypto.subtle.verify(
+    "Ed25519",
+    publicKey,
+    sigBytes,
+    enc.encode(message)
+  );
+}
+
+function extractSignatureFromInput(inputText) {
+  const lines = inputText.trim().split('\n');
+  let signatureBase64 = null;
+  let morseOnly = inputText;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line.startsWith(ED25519_SIG_LINE_PREFIX)) {
+      signatureBase64 = line.slice(ED25519_SIG_LINE_PREFIX.length).trim();
+      morseOnly = lines.slice(0, i).join('\n').trim();
+      break;
+    }
+  }
+
+  return { morseOnly, signatureBase64 };
 }
 
 // ── Test runner ──────────────────────────────────────────────────────────────
@@ -340,7 +427,7 @@ await test("DMM1 v2 payload layout: header(40) ‖ ciphertext+tag(N)", async () 
   // Verify DMM1 magic
   assert(isDmm1(bytes), "Missing DMM1 magic header");
   assert(bytes[4] === DMM1_VERSION, `Expected version ${DMM1_VERSION}, got ${bytes[4]}`);
-  assert(bytes[5] === KDF_PBKDF2, `Expected KDF ID ${KDF_PBKDF2}`);
+  assert(bytes[5] === KDF_ARGON2ID, `Expected KDF ID ${KDF_ARGON2ID}`);
 
   // header(40) + ciphertext(len) + GCM tag(16)
   const plaintextBytes = enc.encode(plaintext).byteLength;
@@ -420,25 +507,33 @@ await test("Tampered header (AAD) is rejected", async () => {
   assert(threw, "Should have rejected tampered AAD (header)");
 });
 
-// 19. Legacy v1 payload decrypts via backward-compat path
-await test("Legacy v1 payload decrypts correctly (backward compat)", async () => {
-  const plaintext = "legacy message";
-  const password  = "legacyPassword12345";
-  const { hex }   = await legacyV1Encrypt(plaintext, password);
-  // v1 payload does NOT start with DMM1 magic
-  const bytes = bytesFromHex(hex);
-  assert(!isDmm1(bytes), "v1 payload should not have DMM1 magic");
-  // dmmDecryptAny should still handle it
-  assert(await dmmDecryptAny(hex, password) === plaintext, "Legacy v1 decrypt failed");
+// 19. Legacy v1 payload is rejected (no backward compat)
+await test("Legacy v1 payload is rejected (no backward compat)", async () => {
+  // Create a fake legacy v1 payload (no DMM1 magic, just salt+iv+ciphertext)
+  const fakeHex = "00".repeat(16 + 12 + 32); // salt + iv + fake ciphertext
+  let threw = false;
+  try { await dmmDecryptAny(fakeHex, "anyPassword12345"); } catch (e) {
+    threw = e.message.includes("Invalid payload format");
+  }
+  assert(threw, "Should reject legacy v1 payloads");
 });
 
-// 20. Iterations stored in header match what was used
-await test("PBKDF2 iterations stored in header match encrypt params", async () => {
-  const { hex } = await dmmEncryptV2("iter test", "iterPassword12345", "", TEST_ITERS);
+// 20. Argon2id params stored in header match what was used
+await test("Argon2id params stored in header match encrypt params", async () => {
+  const timeCost = 3;
+  const memoryCostKiB = 32768;
+  const parallelism = 4;
+  const { hex } = await dmmEncryptV2("param test", "paramPassword12345", "", timeCost, memoryCostKiB, parallelism);
   const bytes = bytesFromHex(hex);
-  const storedIters = readU32le(bytes, 8);
-  assert(storedIters === TEST_ITERS,
-    `Expected ${TEST_ITERS} iters in header, got ${storedIters}`);
+  const storedTimeCost = bytes[7];
+  const storedMemoryCostKiB = readU16le(bytes, 8);
+  const storedParallelism = bytes[10];
+  assert(storedTimeCost === timeCost,
+    `Expected timeCost ${timeCost} in header, got ${storedTimeCost}`);
+  assert(storedMemoryCostKiB === memoryCostKiB,
+    `Expected memoryCostKiB ${memoryCostKiB} in header, got ${storedMemoryCostKiB}`);
+  assert(storedParallelism === parallelism,
+    `Expected parallelism ${parallelism} in header, got ${storedParallelism}`);
 });
 
 // 21. concatPwPepper helper works correctly
@@ -491,10 +586,127 @@ await test("Full pipeline with pepper: encrypt → Morse → decrypt", async () 
   assert(await aesGcmDecrypt(hexBack, password, pepper) === plaintext, "Plaintext mismatch");
 });
 
+// ── Ed25519 Signing/Verification Tests ───────────────────────────────────────
+
+// 26. Ed25519 key generation produces valid keypair
+await test("Ed25519 key generation produces valid keypair", async () => {
+  const supported = await checkEd25519Support();
+  if (!supported) {
+    console.log("       (Ed25519 not supported in this Node.js version, skipping)");
+    return;
+  }
+  const { privateKeyBase64, publicKeyBase64 } = await generateEd25519KeyPair();
+  assert(privateKeyBase64.length > 40, "Private key should be base64-encoded PKCS8");
+  assert(publicKeyBase64.length > 30, "Public key should be base64-encoded SPKI");
+  // Verify we can re-import them
+  const privKey = await importEd25519PrivateKey(privateKeyBase64);
+  const pubKey = await importEd25519PublicKey(publicKeyBase64);
+  assert(privKey !== null, "Should import private key");
+  assert(pubKey !== null, "Should import public key");
+});
+
+// 27. Ed25519 sign + verify round-trip (valid signature)
+await test("Ed25519 sign + verify round-trip (valid signature)", async () => {
+  const supported = await checkEd25519Support();
+  if (!supported) {
+    console.log("       (Ed25519 not supported, skipping)");
+    return;
+  }
+  const message = "Hello, this is a signed message!";
+  const { privateKeyBase64, publicKeyBase64 } = await generateEd25519KeyPair();
+  const signature = await signMessageEd25519(message, privateKeyBase64);
+  assert(signature.length === 88, `Ed25519 signature should be 88 base64 chars (64 bytes), got ${signature.length}`);
+  const isValid = await verifySignatureEd25519(message, signature, publicKeyBase64);
+  assert(isValid === true, "Signature should be valid");
+});
+
+// 28. Ed25519 verification fails with wrong public key
+await test("Ed25519 verification fails with wrong public key", async () => {
+  const supported = await checkEd25519Support();
+  if (!supported) {
+    console.log("       (Ed25519 not supported, skipping)");
+    return;
+  }
+  const message = "Signed with key A";
+  const keyPairA = await generateEd25519KeyPair();
+  const keyPairB = await generateEd25519KeyPair();
+  const signature = await signMessageEd25519(message, keyPairA.privateKeyBase64);
+  const isValid = await verifySignatureEd25519(message, signature, keyPairB.publicKeyBase64);
+  assert(isValid === false, "Signature should be INVALID with wrong public key");
+});
+
+// 29. Ed25519 verification fails with tampered message
+await test("Ed25519 verification fails with tampered message", async () => {
+  const supported = await checkEd25519Support();
+  if (!supported) {
+    console.log("       (Ed25519 not supported, skipping)");
+    return;
+  }
+  const originalMessage = "Original message content";
+  const tamperedMessage = "Tampered message content";
+  const { privateKeyBase64, publicKeyBase64 } = await generateEd25519KeyPair();
+  const signature = await signMessageEd25519(originalMessage, privateKeyBase64);
+  const isValid = await verifySignatureEd25519(tamperedMessage, signature, publicKeyBase64);
+  assert(isValid === false, "Signature should be INVALID for tampered message");
+});
+
+// 30. Ed25519 signature extraction from input text
+await test("Ed25519 signature extraction from input text", async () => {
+  const morse = ".- -... -.-. -.. . ..-.";
+  const sig = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const combined = `${morse}\nEd25519 Signature (base64): ${sig}`;
+  const { morseOnly, signatureBase64 } = extractSignatureFromInput(combined);
+  assert(morseOnly === morse, `Morse extraction failed: got "${morseOnly}"`);
+  assert(signatureBase64 === sig, `Signature extraction failed: got "${signatureBase64}"`);
+  
+  // Test without signature
+  const { morseOnly: m2, signatureBase64: s2 } = extractSignatureFromInput(morse);
+  assert(m2 === morse, "Should return original if no signature");
+  assert(s2 === null, "Should return null signature if none present");
+});
+
+// 31. Ed25519 full pipeline: sign plaintext → encrypt → decrypt → verify
+await test("Ed25519 full pipeline: sign plaintext → encrypt → decrypt → verify", async () => {
+  const supported = await checkEd25519Support();
+  if (!supported) {
+    console.log("       (Ed25519 not supported, skipping)");
+    return;
+  }
+  const plaintext = "Secret signed message for full pipeline test!";
+  const password = "fullPipelinePassword12345";
+  const { privateKeyBase64, publicKeyBase64 } = await generateEd25519KeyPair();
+  
+  // Sender: sign plaintext, then encrypt
+  const signature = await signMessageEd25519(plaintext, privateKeyBase64);
+  const { hex } = await aesGcmEncrypt(plaintext, password);
+  const morse = toMorseHex(hex);
+  
+  // Simulate transmission with signature appended
+  const transmitted = `${morse}\nEd25519 Signature (base64): ${signature}`;
+  
+  // Recipient: extract signature, decrypt, verify
+  const { morseOnly, signatureBase64 } = extractSignatureFromInput(transmitted);
+  const { hex: hexBack } = morseToHex(morseOnly);
+  const decrypted = await aesGcmDecrypt(hexBack, password);
+  assert(decrypted === plaintext, "Decrypted plaintext mismatch");
+  
+  const isValid = await verifySignatureEd25519(decrypted, signatureBase64, publicKeyBase64);
+  assert(isValid === true, "Signature should verify against decrypted plaintext");
+});
+
+// 32. Ed25519 browser support detection
+await test("Ed25519 browser support detection works", async () => {
+  const supported = await checkEd25519Support();
+  // In Node.js 18+, Ed25519 should be supported
+  // This test just verifies the function doesn't throw
+  assert(typeof supported === "boolean", "checkEd25519Support should return boolean");
+  console.log(`       (Ed25519 supported: ${supported})`);
+});
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log(
   exitCode === 0
-    ? "\n=== All 25 encryption tests passed ==="
+    ? "\n=== All 32 encryption tests passed ==="
     : "\n=== SOME TESTS FAILED ==="
 );
 process.exit(exitCode);
