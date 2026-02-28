@@ -843,10 +843,18 @@ async function aesGcmDecrypt(hex, password, pepper) {
 const ED25519_SIG_LINE_PREFIX = "Ed25519 Signature (base64): ";
 
 function base64ToBytes(b64) {
-  const binStr = atob(b64);
-  const bytes = new Uint8Array(binStr.length);
-  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
-  return bytes;
+  if (!b64 || typeof b64 !== 'string') throw new Error('Invalid base64 input');
+  // Validate base64 format
+  const b64Clean = b64.replace(/\s/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64Clean)) throw new Error('Invalid base64 characters');
+  try {
+    const binStr = atob(b64Clean);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    return bytes;
+  } catch (e) {
+    throw new Error('Invalid base64 encoding: ' + (e?.message || String(e)));
+  }
 }
 
 function bytesToBase64(bytes) {
@@ -855,11 +863,15 @@ function bytesToBase64(bytes) {
   return btoa(binStr);
 }
 
+let _ed25519SupportCache = null;
 async function checkEd25519Support() {
+  if (_ed25519SupportCache !== null) return _ed25519SupportCache;
   try {
     const testKey = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-    return !!testKey;
+    _ed25519SupportCache = !!testKey;
+    return _ed25519SupportCache;
   } catch (e) {
+    _ed25519SupportCache = false;
     return false;
   }
 }
@@ -888,25 +900,39 @@ async function generateEd25519KeyPair() {
 }
 
 async function importEd25519PrivateKey(base64Pkcs8) {
+  if (!base64Pkcs8 || typeof base64Pkcs8 !== 'string') {
+    throw new Error('Private key is required');
+  }
   const keyData = base64ToBytes(base64Pkcs8);
-  return crypto.subtle.importKey(
-    "pkcs8",
-    keyData,
-    "Ed25519",
-    false,
-    ["sign"]
-  );
+  try {
+    return await crypto.subtle.importKey(
+      "pkcs8",
+      keyData,
+      "Ed25519",
+      false,
+      ["sign"]
+    );
+  } catch (e) {
+    throw new Error('Invalid Ed25519 private key format: ' + (e?.message || String(e)));
+  }
 }
 
 async function importEd25519PublicKey(base64Spki) {
+  if (!base64Spki || typeof base64Spki !== 'string') {
+    throw new Error('Public key is required');
+  }
   const keyData = base64ToBytes(base64Spki);
-  return crypto.subtle.importKey(
-    "spki",
-    keyData,
-    "Ed25519",
-    false,
-    ["verify"]
-  );
+  try {
+    return await crypto.subtle.importKey(
+      "spki",
+      keyData,
+      "Ed25519",
+      false,
+      ["verify"]
+    );
+  } catch (e) {
+    throw new Error('Invalid Ed25519 public key format: ' + (e?.message || String(e)));
+  }
 }
 
 async function signMessageEd25519(message, privateKeyBase64) {
@@ -917,13 +943,22 @@ async function signMessageEd25519(message, privateKeyBase64) {
     privateKey,
     enc.encode(message)
   );
-  return bytesToBase64(new Uint8Array(signature));
+  const sigBytes = new Uint8Array(signature);
+  // Ed25519 signatures must be exactly 64 bytes
+  if (sigBytes.length !== 64) {
+    throw new Error(`Unexpected Ed25519 signature length: ${sigBytes.length} (expected 64)`);
+  }
+  return bytesToBase64(sigBytes);
 }
 
 async function verifySignatureEd25519(message, signatureBase64, publicKeyBase64) {
   const publicKey = await importEd25519PublicKey(publicKeyBase64);
   const enc = new TextEncoder();
   const sigBytes = base64ToBytes(signatureBase64);
+  // Ed25519 signatures are always exactly 64 bytes
+  if (sigBytes.length !== 64) {
+    throw new Error(`Invalid Ed25519 signature length: expected 64 bytes, got ${sigBytes.length}`);
+  }
   return crypto.subtle.verify(
     "Ed25519",
     publicKey,
@@ -1447,8 +1482,7 @@ async function runDadMode() {
       tip.className = "help-tip";
       tip.textContent = "?";
       tip.setAttribute("data-tip",
-        "First 32 hex chars = random salt (16 bytes). " +
-        "Next 24 hex chars = random IV/nonce (12 bytes). " +
+        "DMM1 v2 header: magic (4B) + version + KDF params + salt (16B) + IV (12B) = 40 bytes total. " +
         "These are NOT secret \u2014 bundled so the same password+message never produces the same ciphertext twice. " +
         "The rest is AES-GCM ciphertext + authentication tag.");
       b.appendChild(tip);
@@ -1457,7 +1491,7 @@ async function runDadMode() {
       outputEl.appendChild(d);
     })();
 
-    appendLine("KDF:", `PBKDF2-SHA256 (iters=${meta?.iters ?? 'n/a'})` + (meta?.pepperUsed ? " + Signal Key" : ""));
+    appendLine("KDF:", `Argon2id (t=${meta?.timeCost}, m=${meta?.memoryCostKiB}KiB, p=${meta?.parallelism})` + (meta?.pepperUsed ? " + Signal Key" : ""));
     const hr = document.createElement("div");
     hr.className = "hr";
     outputEl.appendChild(hr);

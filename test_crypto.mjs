@@ -293,13 +293,22 @@ async function signMessageEd25519(message, privateKeyBase64) {
     privateKey,
     enc.encode(message)
   );
-  return bytesToBase64(new Uint8Array(signature));
+  const sigBytes = new Uint8Array(signature);
+  // Ed25519 signatures must be exactly 64 bytes
+  if (sigBytes.length !== 64) {
+    throw new Error(`Unexpected Ed25519 signature length: ${sigBytes.length} (expected 64)`);
+  }
+  return bytesToBase64(sigBytes);
 }
 
 async function verifySignatureEd25519(message, signatureBase64, publicKeyBase64) {
   const publicKey = await importEd25519PublicKey(publicKeyBase64);
   const enc = new TextEncoder();
   const sigBytes = base64ToBytes(signatureBase64);
+  // Ed25519 signatures must be exactly 64 bytes
+  if (sigBytes.length !== 64) {
+    throw new Error(`Invalid Ed25519 signature length: expected 64 bytes, got ${sigBytes.length}`);
+  }
   return crypto.subtle.verify(
     "Ed25519",
     publicKey,
