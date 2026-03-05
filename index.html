@@ -1056,8 +1056,9 @@ function waitForCanPlay(video, timeoutMs = 5000) {
 async function playTurtleDuringTx() {
   if (!turtleTxVid) return;
 
-  // Reliability: keep it muted (no audio) and playsinline.
-  turtleTxVid.muted = true;
+  // Keep audio enabled so transmit clicks can play the clip's sound track.
+  turtleTxVid.muted = false;
+  turtleTxVid.volume = 1;
   turtleTxVid.playsInline = true;
 
   // Keep the animation visible during transmit; loop so short clips don't "flash".
@@ -1075,12 +1076,18 @@ async function playTurtleDuringTx() {
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
     return;
-  } catch (_) { /* fall through */ }
+  } catch (err) {
+    // If audio autoplay is blocked, try once more after ensuring media is loaded.
+    if (!(err && err.name === "NotAllowedError")) {
+      /* fall through */
+    }
+  }
 
   // Attempt 2: load + wait
   try {
     turtleTxVid.load();
     await waitForCanPlay(turtleTxVid, 6000);
+    turtleTxVid.muted = false;
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
   } catch (e) {
