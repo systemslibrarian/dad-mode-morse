@@ -156,6 +156,24 @@
       background: #00aa66;
       color: #001a10;
     }
+    .tx-media-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .tx-video-controls {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      min-height: 34px;
+    }
+    .tx-video-controls .tx-option-btn {
+      display: none;
+    }
+    .tx-video-controls .tx-option-btn.show {
+      display: inline-block;
+    }
     #turtleTxVid{
       width: 240px;
       max-width: 100%;
@@ -445,16 +463,20 @@
       <button id="txBtn">Transmit</button>
       <button id="clearBtn">Clear</button>
       <div class="tx-options">
-        <button type="button" id="txReplayBtn" class="tx-option-btn">Replay</button>
         <button type="button" id="txMuteBtn" class="tx-option-btn">Mute: Off</button>
       </div>
     </div>
 
-    <!-- Put turtle.mp4 next to index.html -->
-    <video id="turtleTxVid" preload="auto" playsinline poster="./turtle.png">
-      <source src="./turtle.mp4" type="video/mp4" />
-      Your browser does not support the video tag.
-    </video>
+    <div class="tx-media-stack">
+      <!-- Put turtle.mp4 next to index.html -->
+      <video id="turtleTxVid" preload="auto" playsinline poster="./turtle.png">
+        <source src="./turtle.mp4" type="video/mp4" />
+        Your browser does not support the video tag.
+      </video>
+      <div class="tx-video-controls">
+        <button type="button" id="txReplayBtn" class="tx-option-btn">Replay</button>
+      </div>
+    </div>
   </div>
 
   <!-- Signal strength slider -->
@@ -1081,6 +1103,7 @@ function waitForCanPlay(video, timeoutMs = 5000) {
 
 async function playTurtleDuringTx() {
   if (!turtleTxVid) return;
+  setTxReplayVisible(false);
 
   // Honor user mute preference for transmit clip audio.
   turtleTxVid.muted = txMutedEnabled();
@@ -1135,6 +1158,12 @@ function setTxMuteState(muted) {
   }
 }
 
+function setTxReplayVisible(show) {
+  const replayBtn = document.getElementById("txReplayBtn");
+  if (!replayBtn) return;
+  replayBtn.classList.toggle("show", !!show);
+}
+
 function primeTurtleTxVideo() {
   if (!turtleTxVid) return;
   try {
@@ -1158,6 +1187,7 @@ function stopTurtleTx(force = false) {
       turtleTxVid.playbackRate = 1.0;
       turtleTxVid.pause();
       try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxReplayVisible(false);
       setTxVisual(false, "READY");
       return;
     }
@@ -1169,6 +1199,7 @@ function stopTurtleTx(force = false) {
     const onEnded = () => {
       turtleTxVid.removeEventListener("ended", onEnded);
       try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxReplayVisible(true);
       setTxVisual(false, "READY");
     };
     turtleTxVid.addEventListener("ended", onEnded, { once: true });
@@ -1178,6 +1209,7 @@ function stopTurtleTx(force = false) {
       turtleTxVid.removeEventListener("ended", onEnded);
       turtleTxVid.pause();
       try { turtleTxVid.currentTime = 0; } catch (_) {}
+      setTxReplayVisible(true);
       setTxVisual(false, "READY");
     }, 30000); // 30s safety net
   } catch (_) {
@@ -2157,6 +2189,7 @@ turtleTxVid?.addEventListener("error", () => console.warn("turtle.mp4 failed to 
 // Prime transmit media so audible playback is ready when Transmit is clicked.
 primeTurtleTxVideo();
 setTxMuteState(false);
+setTxReplayVisible(false);
 
 setStatus("Ready...");
 setTxVisual(false, "IDLE");
