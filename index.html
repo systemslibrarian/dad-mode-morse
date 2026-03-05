@@ -1095,6 +1095,15 @@ async function playTurtleDuringTx() {
   }
 }
 
+function primeTurtleTxVideo() {
+  if (!turtleTxVid) return;
+  try {
+    // Preload media data early so user-gesture playback can start with sound.
+    turtleTxVid.preload = "auto";
+    turtleTxVid.load();
+  } catch (_) {}
+}
+
 function stopTurtleTx(force = false) {
   try {
     if (turtleTxStopTimer) {
@@ -1479,8 +1488,10 @@ async function runDadMode() {
   const txBtn = document.getElementById("txBtn");
   if (txBtn) txBtn.disabled = true;
 
-  // play the MP4 next to the Transmit button (reliably)
-  playTurtleDuringTx();
+  // If pointerdown did not already start it, attempt playback here too.
+  if (turtleTxVid && turtleTxVid.paused) {
+    playTurtleDuringTx();
+  }
 
   let signatureBase64 = null;
 
@@ -2007,7 +2018,14 @@ function degradeMorse(morseStr, signalLevel) {
 /** =========================
  *  Wire up controls
  *  ========================= */
-document.getElementById("txBtn").addEventListener("click", () => runDadMode());
+const txBtnEl = document.getElementById("txBtn");
+txBtnEl.addEventListener("pointerdown", () => {
+  // Earlier than click: this is the best moment for unmuted media start.
+  if (turtleTxVid && turtleTxVid.paused) {
+    playTurtleDuringTx().catch(() => {});
+  }
+});
+txBtnEl.addEventListener("click", () => runDadMode());
 document.getElementById("clearBtn").addEventListener("click", () => clearAll());
 document.getElementById("decBtn").addEventListener("click", () => decryptDadMode());
 
@@ -2085,6 +2103,9 @@ if (signalSliderEl) {
 
 // Helpful console hint if video fails to load
 turtleTxVid?.addEventListener("error", () => console.warn("turtle.mp4 failed to load (check filename/path)."));
+
+// Prime transmit media so audible playback is ready when Transmit is clicked.
+primeTurtleTxVideo();
 
 setStatus("Ready...");
 setTxVisual(false, "IDLE");
