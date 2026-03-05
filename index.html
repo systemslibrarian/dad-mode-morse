@@ -135,6 +135,25 @@
       gap:10px;
       flex-wrap:wrap;
     }
+    .tx-options {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      width: 100%;
+      margin-top: 2px;
+      font-size: 13px;
+      color: #88ffcc;
+    }
+    .tx-options label {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: normal;
+      cursor: pointer;
+      user-select: none;
+    }
     #turtleTxVid{
       width: 240px;
       max-width: 100%;
@@ -423,6 +442,10 @@
     <div class="tx-row-left">
       <button id="txBtn">Transmit</button>
       <button id="clearBtn">Clear</button>
+      <div class="tx-options">
+        <label><input type="checkbox" id="txPlaybackToggle" checked /> Playback</label>
+        <label><input type="checkbox" id="txMuteToggle" /> Mute</label>
+      </div>
     </div>
 
     <!-- Put turtle.mp4 next to index.html -->
@@ -1055,14 +1078,15 @@ function waitForCanPlay(video, timeoutMs = 5000) {
 
 async function playTurtleDuringTx() {
   if (!turtleTxVid) return;
+  if (!txPlaybackEnabled()) return;
 
-  // Keep audio enabled so transmit clicks can play the clip's sound track.
-  turtleTxVid.muted = false;
+  // Honor user mute preference for transmit clip audio.
+  turtleTxVid.muted = txMutedEnabled();
   turtleTxVid.volume = 1;
   turtleTxVid.playsInline = true;
 
-  // Keep the animation visible during transmit; loop so short clips don't "flash".
-  turtleTxVid.loop = true;
+  // Play exactly one cycle per transmit click.
+  turtleTxVid.loop = false;
 
   // Slow it down slightly so it's easier to notice.
   turtleTxVid.playbackRate = 0.75;
@@ -1087,12 +1111,22 @@ async function playTurtleDuringTx() {
   try {
     turtleTxVid.load();
     await waitForCanPlay(turtleTxVid, 6000);
-    turtleTxVid.muted = false;
+    turtleTxVid.muted = txMutedEnabled();
     const p = turtleTxVid.play();
     if (p && typeof p.then === "function") await p;
   } catch (e) {
     console.warn("Turtle TX video unavailable:", e.message);
   }
+}
+
+function txPlaybackEnabled() {
+  const el = document.getElementById("txPlaybackToggle");
+  return !el || el.checked;
+}
+
+function txMutedEnabled() {
+  const el = document.getElementById("txMuteToggle");
+  return !!(el && el.checked);
 }
 
 function primeTurtleTxVideo() {
@@ -1489,7 +1523,7 @@ async function runDadMode() {
   if (txBtn) txBtn.disabled = true;
 
   // If pointerdown did not already start it, attempt playback here too.
-  if (turtleTxVid && turtleTxVid.paused) {
+  if (txPlaybackEnabled() && turtleTxVid && turtleTxVid.paused) {
     playTurtleDuringTx();
   }
 
@@ -2021,11 +2055,25 @@ function degradeMorse(morseStr, signalLevel) {
 const txBtnEl = document.getElementById("txBtn");
 txBtnEl.addEventListener("pointerdown", () => {
   // Earlier than click: this is the best moment for unmuted media start.
-  if (turtleTxVid && turtleTxVid.paused) {
+  if (txPlaybackEnabled() && turtleTxVid && turtleTxVid.paused) {
     playTurtleDuringTx().catch(() => {});
   }
 });
 txBtnEl.addEventListener("click", () => runDadMode());
+
+const txPlaybackToggleEl = document.getElementById("txPlaybackToggle");
+const txMuteToggleEl = document.getElementById("txMuteToggle");
+txPlaybackToggleEl?.addEventListener("change", () => {
+  if (!txPlaybackEnabled()) {
+    stopTurtleTx(true);
+  }
+});
+txMuteToggleEl?.addEventListener("change", () => {
+  if (turtleTxVid) {
+    turtleTxVid.muted = txMutedEnabled();
+  }
+});
+
 document.getElementById("clearBtn").addEventListener("click", () => clearAll());
 document.getElementById("decBtn").addEventListener("click", () => decryptDadMode());
 
